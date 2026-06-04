@@ -10,21 +10,31 @@ Talk directly to TradingView's chart widget via Chrome DevTools Protocol. Read d
 pip install pytvtools
 ```
 
-**Launch Chrome** with CDP and navigate to TradingView:
-```bash
-google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/tv-profile \
-  --headless=new "https://www.tradingview.com/chart/"
+**Launch Chrome and connect — works on Linux, macOS, and Windows:**
+```python
+import asyncio
+from pytvtools import Chrome, TV
+
+async def main():
+    # Start headless Chrome (auto-detects binary, cross-platform)
+    chrome = Chrome()
+    await chrome.start(headless=True)
+
+    # Connect to TradingView and read data
+    async with TV() as tv:
+        state = await tv.get_state()
+        ohlcv = await tv.get_ohlcv(summary=True)
+        studies = await tv.get_study_values()
+        print(studies.get("Relative Strength Index"))
+
+    await chrome.stop()
+
+asyncio.run(main())
 ```
 
-**Connect and read:**
-```python
-from pytvtools import TV
-
-async with TV() as tv:
-    state = await tv.get_state()
-    ohlcv = await tv.get_ohlcv(summary=True)
-    studies = await tv.get_study_values()
-    print(studies["Relative Strength Index"])
+Or launch Chrome manually (same command works in PowerShell and bash):
+```bash
+pytvtools-chrome
 ```
 
 ## API

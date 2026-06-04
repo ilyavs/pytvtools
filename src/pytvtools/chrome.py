@@ -111,6 +111,29 @@ class Chrome:
         await asyncio.sleep(1)
         await self.start(headless=headless)
 
+    @staticmethod
+    def launch_command(
+        port: int = CDP_PORT,
+        tv_url: str = TV_URL,
+        user_data_dir: str | Path = USER_DATA_DIR,
+        headless: bool = True,
+    ) -> str:
+        """Print the shell command to launch Chrome on any platform.
+
+        Works in both Linux bash and Windows PowerShell.
+        """
+        binary = _find_chrome() or "google-chrome"
+        ud = str(user_data_dir)
+        hl = "--headless=new" if headless else ""
+        return (
+            f"{binary} --remote-debugging-port={port}"
+            f" --user-data-dir={ud}"
+            f" --no-first-run --no-default-browser-check --disable-sync"
+            f" --no-sandbox --disable-gpu"
+            f" {hl}"
+            f" \"{tv_url}\""
+        )
+
     async def is_alive(self) -> bool:
         if not self._proc or self._proc.returncode is not None:
             return False

@@ -14,6 +14,7 @@ dev = ["pytest", "pytest-asyncio"]
 
 [project.scripts]
 pytvtools-mcp = "pytvtools.mcp_server:main"
+pytvtools-chrome = "pytvtools._chrome_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

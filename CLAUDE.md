@@ -61,12 +61,16 @@ Registers all TV methods as MCP tools. Agent calls them like any other tool.
 
 ## Chrome launch
 
+Cross-platform — works in both bash and PowerShell:
 ```bash
-# Linux (including ARM)
-google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/tv-profile --headless=new "https://www.tradingview.com/chart/"
+pytvtools-chrome
+```
 
-# Windows (pwsh)
-& "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="$env:USERPROFILE\.tv-profile" --headless=new "https://www.tradingview.com/chart/"
+Or from Python:
+```python
+from pytvtools import Chrome
+chrome = Chrome()
+await chrome.start(headless=True)
 ```
 
 ## Remote tunnel
