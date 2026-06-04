@@ -99,6 +99,18 @@ pytvtools-mcp
 
 Exposes all TV operations as MCP tools for Claude Code / any MCP agent.
 
+## Docker (ARM64 / x86_64)
+
+```bash
+docker compose -f docker/docker-compose.yml build
+docker compose -f docker/docker-compose.yml up -d
+docker compose exec pytvtools python examples/basic.py
+```
+
+The container starts Chrome headless with CDP on port 9222. Source code is volume-mounted — edits on the host take effect immediately. Same image runs on your laptop and Oracle ARM.
+
+The entrypoint starts Chrome in the background and waits for CDP, then runs the provided CMD. The `-d` flag runs it detached; use `docker compose exec` to run scripts.
+
 ## Remote use (Oracle ARM + SSH tunnel)
 
 ```bash

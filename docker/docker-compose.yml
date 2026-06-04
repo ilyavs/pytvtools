@@ -1,0 +1,18 @@
+services:
+  pytvtools:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "9222:9222"
+    volumes:
+      - ..:/app
+      - chrome-data:/data/chrome-profile
+    environment:
+      - TV_CDP_PORT=9222
+      - TV_URL=https://www.tradingview.com/chart/
+    # Override CMD to run a script:
+    # command: python examples/basic.py
+
+volumes:
+  chrome-data:
