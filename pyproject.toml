@@ -1,0 +1,19 @@
+[project]
+name = "pytvtools"
+version = "0.1.0"
+description = "Pure Python CDP library for TradingView in Chrome — no Node.js, no MCP server deps."
+requires-python = ">=3.11"
+dependencies = [
+    "httpx",
+    "websockets",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp"]
+dev = ["pytest", "pytest-asyncio"]
+
+[project.scripts]
+pytvtools-mcp = "pytvtools.mcp_server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
