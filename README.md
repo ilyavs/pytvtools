@@ -99,6 +99,36 @@ pytvtools-mcp
 
 Exposes all TV operations as MCP tools for Claude Code / any MCP agent.
 
+## Deployment: automation server + manual workstation
+
+Two separate Chrome instances, same TV account, no conflicts:
+
+| Role | Where | Purpose |
+|------|-------|---------|
+| **Automation server** | Docker on Oracle ARM | Headless Chrome + pytvtools scripts running 24/7 |
+| **Workstation** | Your laptop | Visible Chrome for manual charting, drawing, indicator setup |
+
+**Pytvtools connects to either** — it just needs a CDP port. The automation server drives the headless instance. You draw on your laptop's TV window independently.
+
+```
+┌──────────────────────────┐     ┌──────────────────────────┐
+│  Oracle ARM (Docker)     │     │  Your laptop             │
+│  Chrome headless :9222   │     │  Chrome (visible)        │
+│  pytvtools scripts       │     │  Manual charting         │
+│  ┌────────────────┐      │     │  Drawings, indicators    │
+│  │ TV(port=9222)  │      │     └──────────────────────────┘
+│  └────────────────┘      │
+└──────────────────────────┘
+```
+
+Headless and visible Chrome logged into the same TV account work fine — they share the same layouts and settings server-side. Draw on your laptop, pytvtools reads those drawings from the headless instance via `get_pine_lines()` / `get_pine_labels()`.
+
+For one-off debugging from your laptop against the server's Chrome:
+```bash
+ssh -L 9222:localhost:9222 user@oracle-instance
+# Then connect chrome://inspect or run pytvtools locally
+```
+
 ## Docker (ARM64 / x86_64)
 
 ```bash
@@ -110,13 +140,6 @@ docker compose exec pytvtools python examples/basic.py
 The container starts Chrome headless with CDP on port 9222. Source code is volume-mounted — edits on the host take effect immediately. Same image runs on your laptop and Oracle ARM.
 
 The entrypoint starts Chrome in the background and waits for CDP, then runs the provided CMD. The `-d` flag runs it detached; use `docker compose exec` to run scripts.
-
-## Remote use (Oracle ARM + SSH tunnel)
-
-```bash
-ssh -L 9222:localhost:9222 user@oracle-instance
-# Then run pytvtools locally — talks to the remote Chrome
-```
 
 ## Disclaimer
 
