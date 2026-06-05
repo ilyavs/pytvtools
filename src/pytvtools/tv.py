@@ -22,11 +22,8 @@ logger = logging.getLogger(__name__)
 # Known TV internal JS API paths (discovered via live probing)
 # ---------------------------------------------------------------------------
 
-_CHART_API = "window.TradingViewApi._activeChartWidgetWV.value()"
-_CHART_COLLECTION = "window.TradingViewApi._chartWidgetCollection"
-_REPLAY_API = "window.TradingViewApi._replayApi"
-_ALERT_SERVICE = "window.TradingViewApi._alertService"
-_BOTTOM_BAR = "window.TradingView.bottomWidgetBar"
+_CHART_API = "window.TradingViewApi.chart()"
+
 
 
 # ---------------------------------------------------------------------------
@@ -131,32 +128,27 @@ class TV:
     async def get_ohlcv(self, count: int = 500, summary: bool = False) -> Any:
         js = f"""
         (function() {{
-            var bars = {_CHART_API}._chartWidget.model().mainSeries().bars();
-            var all = bars().slice(-{count});
+            var items = {_CHART_API}.chartWidget().model().mainSeries().bars()._items;
+            var all = items.slice(-{count});
+            var bars = all.map(function(it) {{
+                var v = it.value;
+                return {{timestamp: v[0], open: v[1], high: v[2], low: v[3], close: v[4], volume: v[5]}};
+            }});
             if ({str(summary).lower()}) {{
-                var highs = all.map(function(b) {{ return b.high; }});
-                var lows = all.map(function(b) {{ return b.low; }});
-                var closes = all.map(function(b) {{ return b.close; }});
+                var highs = bars.map(function(b) {{ return b.high; }});
+                var lows = bars.map(function(b) {{ return b.low; }});
+                var closes = bars.map(function(b) {{ return b.close; }});
                 return {{
-                    count: all.length,
+                    count: bars.length,
                     high: Math.max.apply(null, highs),
                     low: Math.min.apply(null, lows),
-                    open: all[0].open,
+                    open: bars[0].open,
                     close: closes[closes.length - 1],
-                    avg_volume: Math.round(all.reduce(function(s,b) {{ return s + b.volume; }}, 0) / all.length),
+                    avg_volume: Math.round(bars.reduce(function(s,b) {{ return s + b.volume; }}, 0) / bars.length),
                     range: (Math.max.apply(null, highs) - Math.min.apply(null, lows)).toFixed(2)
                 }};
             }}
-            return all.map(function(b) {{
-                return {{
-                    timestamp: b.time,
-                    open: b.open,
-                    high: b.high,
-                    low: b.low,
-                    close: b.close,
-                    volume: b.volume
-                }};
-            }});
+            return bars;
         }})()
         """
         return await self._eval(js)
@@ -164,31 +156,36 @@ class TV:
     async def get_quote(self, symbol: str | None = None) -> dict[str, Any]:
         return await self._eval(f"""
         (function() {{
-            var q = window.TradingViewApi._activeChartWidgetWV.value();
-            var s = q.symbol();
-            var quotes = q.quotes();
-            if (quotes && quotes[s]) return quotes[s];
+            var s = {_CHART_API}.symbol();
             return {{ symbol: s }};
         }})()
         """)
 
     async def get_study_values(self) -> dict[str, Any]:
         """Read current values from ALL visible indicator studies."""
-        return await self._eval("""
-        (function() {
-            var c = window.TradingViewApi._activeChartWidgetWV.value();
-            var studies = c.getAllStudies() || [];
-            var result = {};
-            studies.forEach(function(s) {
-                try {
-                    var vals = c.chartWidget().activeChart().study(s.id).getAllStudiesValues();
-                    result[s.name] = vals;
-                } catch(e) {
-                    result[s.name] = {error: e.message};
-                }
-            });
+        return await self._eval(f"""
+        (function() {{
+            var model = {_CHART_API}.chartWidget().model();
+            var studies = {_CHART_API}.getAllStudies() || [];
+            var result = {{}};
+            studies.forEach(function(s) {{
+                try {{
+                    var ds = model.dataSourceForId(s.id);
+                    if (!ds) {{ result[s.name] = {{error: 'no data source'}}; return; }}
+                    var items = ds._data && ds._data._items;
+                    if (!items || !items.length) {{ result[s.name] = {{error: 'no data'}}; return; }}
+                    var values = [];
+                    for (var i = 0; i < items.length; i++) {{
+                        var v = items[i].value;
+                        values.push({{timestamp: v[0], value: v[1]}});
+                    }}
+                    result[s.name] = {{title: ds.title ? ds.title() : s.name, values: values}};
+                }} catch(e) {{
+                    result[s.name] = {{error: e.message}};
+                }}
+            }});
             return result;
-        })()
+        }})()
         """)
 
     # ------------------------------------------------------------------
@@ -196,21 +193,21 @@ class TV:
     # ------------------------------------------------------------------
 
     async def add_indicator(
-        self, name: str, inputs: dict[str, Any] | None = None
-    ) -> None:
-        """Add an indicator by full name (e.g. 'Relative Strength Index')."""
-        expr = f"window.TradingViewApi._addIndicatorToChart({_js_str(name)})"
-        if inputs:
-            expr = f"(function(){{ {expr}; setTimeout(function(){{ /* set inputs */ }}, 500); }})()"
-        await self._eval(expr)
+        self, study_id: str, inputs: dict[str, Any] | None = None
+    ) -> str | None:
+        """Add an indicator by study ID (e.g. 'RSI@tv-basicstudies').
+
+        Returns the entity ID of the created study, or None on failure.
+        """
+        expr = f"""
+        (function() {{
+            return {_CHART_API}._createStudy({{type: "java", studyId: {_js_str(study_id)}}});
+        }})()
+        """
+        return await self._eval(expr, await_promise=True)
 
     async def remove_indicator(self, entity_id: str) -> None:
-        await self._eval(f"""
-        (function() {{
-            var c = {_CHART_API};
-            c.chartWidget().activeChart().removeEntity({_js_str(entity_id)});
-        }})()
-        """)
+        await self._eval(f"({_CHART_API}.removeEntity({_js_str(entity_id)}))")
 
     # ------------------------------------------------------------------
     # Pine Script
@@ -250,16 +247,16 @@ class TV:
     async def get_pine_lines(
         self, study_filter: str | None = None
     ) -> list[dict[str, Any]]:
-        js = """
-        (function() {
-            var c = window.TradingViewApi._activeChartWidgetWV.value();
+        js = f"""
+        (function() {{
+            var c = {_CHART_API};
             var lines = c.chartWidget().activeChart().getAllLines() || [];
             var result = [];
-            lines.forEach(function(l) {
-                result.push({id: l.id, price: l.price, text: l.text || ''});
-            });
+            lines.forEach(function(l) {{
+                result.push({{id: l.id, price: l.price, text: l.text || ''}});
+            }});
             return result;
-        })()
+        }})()
         """
         raw = await self._eval(js) or []
         if study_filter:
@@ -271,7 +268,7 @@ class TV:
     ) -> list[dict[str, Any]]:
         js = f"""
         (function() {{
-            var labels = window.TradingViewApi._activeChartWidgetWV.value()
+            var labels = {_CHART_API}
                 .chartWidget().activeChart().getAllLabels() || [];
             return labels.slice(0, {max_labels}).map(function(l) {{
                 return {{text: l.text || '', price: l.price, time: l.time}};
@@ -326,10 +323,10 @@ class TV:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    async def _eval(self, expression: str) -> Any:
+    async def _eval(self, expression: str, **kwargs: Any) -> Any:
         if not self._cdp:
             raise RuntimeError("Not connected. Call connect() first.")
-        return await self._cdp.evaluate(expression)
+        return await self._cdp.evaluate(expression, **kwargs)
 
     async def _ui_click(self, label: str) -> None:
         """Click a UI button by text/aria label."""

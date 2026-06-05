@@ -40,8 +40,8 @@ await chrome.stop()
 - `get_visible_range()` → `{from, to}`
 - `get_ohlcv(count=500, summary=False)` → bars or stats
 - `get_quote(symbol=None)` → real-time price
-- `get_study_values()` → `{indicator_name: values}`
-- `add_indicator(name, inputs=None)` — full name like "Relative Strength Index"
+- `get_study_values()` → `{indicator_name: {title, values: [{timestamp, value}]}}`
+- `add_indicator(study_id)` — e.g. `"RSI@tv-basicstudies"`, returns entity ID
 - `remove_indicator(entity_id)`
 - `capture_screenshot()` → base64 PNG
 - `get_pine_lines(study_filter=None)` → price levels
@@ -58,6 +58,61 @@ await chrome.stop()
 ```
 
 Registers all TV methods as MCP tools. Agent calls them like any other tool.
+
+## TradingView JS API reference (CDP context)
+
+All calls via `Runtime.evaluate` in the TV chart tab.
+
+### Public chart API (preferred — won't trigger "temporary glitch" screen)
+
+```javascript
+window.TradingViewApi.chart()  // the public chart API object
+```
+
+Methods on `chart()`:
+- `getState()` — `{symbol, timeframe, chartType}`
+- `setSymbol(symbol)`, `setResolution(tf)`, `setChartType(type)`
+- `getAllStudies()` → `[{id, name}]` (sparse entity)
+- `getStudyById(id)` → study with `getInputsInfo()`, `getInputValues()`, `getStyleInfo()`, `title()`
+- `getSeries(id)` → series with `barsCount()`, `data()`, `symbolSource()`
+- `removeEntity(id)`, `removeAllStudies()`
+- `chartWidget()` → raw widget
+  - `chartWidget().model()` → chart model with `dataSources()`, `dataSourceForId(id)`, `panes()`, `createStudyInserter()`, `removeSource()`
+- `_createStudy({type: "java", studyId: "Name@tv-basicstudies"})` — returns Promise<string> with entity ID
+
+### Adding indicators
+
+```javascript
+// Correct — uses _createStudy to bypass metadata lookup
+var eid = await chart()._createStudy({type: "java", studyId: "RSI@tv-basicstudies"});
+// eid is the entity ID string e.g. "2tMAgd"
+```
+
+Study ID format: `Name@tv-basicstudies` for built-ins (RSI, MACD, etc.),
+raw ID string for custom indicators (e.g. `SFFMev`).
+
+### Reading indicator values
+
+```javascript
+var ds = chart().chartWidget().model().dataSourceForId(entityId);
+var items = ds._data._items;  // array of {index, value: [timestamp, plotValue]}
+var lastValue = items[items.length - 1].value[1];  // latest plot value
+```
+
+Key internal properties on the data source:
+- `ds._data._items` — all plot values `[{index, value: [ts, val]}]`
+- `ds._study` — internal study object (access with caution)
+- `ds.lastValueData()` — often returns `{noData: true}` (unreliable)
+- `ds.plots()` — plot metadata `{_items: [{index, value}]}`
+- `ds.title()` — display title like `"RSI (14, close)"`
+- `ds.getInputValues()`, `ds.getInputsInfo()`, `ds.getStyleInfo()` — study config
+
+### avoid "temporary glitch"
+
+Use `window.TradingViewApi.chart()` (the public API) instead of
+`window.TradingViewApi._activeChartWidgetWV.value()` (the internal getter).
+The internal getter triggers a "temporary glitch" warning popup that must
+be dismissed by clicking the "Got it" button.
 
 ## Chrome launch
 

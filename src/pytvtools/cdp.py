@@ -12,7 +12,7 @@ import logging
 from typing import Any
 
 import httpx
-import websockets.client as ws_client
+import websockets
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ class CdpConnection:
         self._msg_id = 0
 
     async def connect(self) -> None:
-        self._ws = await ws_client.connect(self._ws_url)
+        self._ws = await websockets.connect(self._ws_url)
         # Enable the Runtime domain
         await self._send("Runtime.enable")
 
@@ -80,11 +80,16 @@ class CdpConnection:
             "params": params or {},
         }
         await self._ws.send(json.dumps(msg))
-        resp = json.loads(await self._ws.recv())
-        if "error" in resp:
-            err = resp["error"]
-            raise CdpError(f"CDP error ({err.get('code')}): {err.get('message')}", err)
-        return resp.get("result", {})
+        while True:
+            raw = await self._ws.recv()
+            resp = json.loads(raw)
+            # Skip CDP notifications (no "id" field)
+            if "id" not in resp:
+                continue
+            if "error" in resp:
+                err = resp["error"]
+                raise CdpError(f"CDP error ({err.get('code')}): {err.get('message')}", err)
+            return resp.get("result", {})
 
 
 # ---------------------------------------------------------------------------
