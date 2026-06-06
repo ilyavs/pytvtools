@@ -17,6 +17,12 @@ from pytvtools.cdp import CdpConnection, find_tv_target, make_ws_url, wait_for_c
 
 logger = logging.getLogger(__name__)
 
+MAX_INDICATORS = 2
+
+
+class TooManyIndicatorsError(RuntimeError):
+    """Raised when adding an indicator would exceed MAX_INDICATORS."""
+
 
 # ---------------------------------------------------------------------------
 # Known TV internal JS API paths (discovered via live probing)
@@ -58,6 +64,7 @@ class TV:
         self.port = port
         self._target = target
         self._cdp: CdpConnection | None = None
+        self._indicator_ids: set[str] = set()
 
     async def __aenter__(self) -> TV:
         await self.connect()
@@ -77,6 +84,20 @@ class TV:
         ws_url = make_ws_url(self._target)
         self._cdp = CdpConnection(ws_url)
         await self._cdp.connect()
+        self._indicator_ids = set(await self._get_study_ids())
+
+    async def get_indicator_count(self) -> int:
+        """Return the number of studies currently on the chart."""
+        return len(await self._get_study_ids())
+
+    async def _get_study_ids(self) -> list[str]:
+        ids = await self._eval(f"""
+        (function() {{
+            var studies = {_CHART_API}.getAllStudies() || [];
+            return studies.map(function(s) {{ return s.id; }});
+        }})()
+        """)
+        return ids or []
 
     async def disconnect(self) -> None:
         if self._cdp:
@@ -110,13 +131,42 @@ class TV:
         await self._eval(_chart_call("setChartType", chart_type))
 
     async def scroll_to_date(self, date: str) -> None:
-        await self._eval(f"({_CHART_API}.scrollToDate({_js_str(date)}))")
+        await self._eval(f"""
+        (function() {{
+            var chart = {_CHART_API};
+            var w = chart.chartWidget();
+            var ac = w.activeChart ? w.activeChart() : null;
+            if (ac && ac.scrollToDate) {{
+                ac.scrollToDate({_js_str(date)});
+            }} else if (w.scrollToDate) {{
+                w.scrollToDate({_js_str(date)});
+            }} else {{
+                var ts = {_js_str(date)};
+                if (typeof ts === 'string' && ts.indexOf('-') > 0) {{
+                    ts = new Date(ts).getTime() / 1000;
+                }}
+                var model = w.model();
+                var sr = model.mainSeries();
+                if (sr && sr.setTimeScale) {{
+                    sr.setTimeScale({{from: ts - 86400, to: ts + 86400}});
+                }}
+            }}
+            return true;
+        }})()
+        """)
 
     async def get_visible_range(self) -> dict[str, Any]:
         return await self._eval(f"""
         (function() {{
-            var r = {_CHART_API}.timeRange();
-            if (r) return {{from: r.from, to: r.to}};
+            var model = {_CHART_API}.chartWidget().model();
+            var sr = model.mainSeries().data();
+            if (sr && sr.first() && sr.last()) {{
+                var first = sr.first();
+                var last = sr.last();
+                return {{from: first.time, to: last.time}};
+            }}
+            var vr = model && model.visibleRange && model.visibleRange();
+            if (vr) return {{from: vr.from, to: vr.to}};
             return null;
         }})()
         """)
@@ -198,16 +248,99 @@ class TV:
         """Add an indicator by study ID (e.g. 'RSI@tv-basicstudies').
 
         Returns the entity ID of the created study, or None on failure.
+        Raises TooManyIndicatorsError if MAX_INDICATORS would be exceeded.
         """
+        self._indicator_ids = set(await self._get_study_ids())
+        if len(self._indicator_ids) >= MAX_INDICATORS:
+            raise TooManyIndicatorsError(
+                f"Chart already has {len(self._indicator_ids)} indicators "
+                f"(max {MAX_INDICATORS}). Remove one first."
+            )
         expr = f"""
         (function() {{
             return {_CHART_API}._createStudy({{type: "java", studyId: {_js_str(study_id)}}});
         }})()
         """
-        return await self._eval(expr, await_promise=True)
+        eid = await self._eval(expr, await_promise=True)
+        if eid:
+            self._indicator_ids.add(eid)
+        return eid
 
     async def remove_indicator(self, entity_id: str) -> None:
         await self._eval(f"({_CHART_API}.removeEntity({_js_str(entity_id)}))")
+        self._indicator_ids.discard(entity_id)
+
+    async def remove_all_indicators(self) -> None:
+        """Remove all studies from the chart."""
+        await self._eval(f"({_CHART_API}.removeAllStudies())")
+        self._indicator_ids.clear()
+
+    async def set_indicator_inputs(
+        self, entity_id: str, inputs: dict[str, Any]
+    ) -> None:
+        """Change input values on an existing indicator."""
+        overrides = json.dumps(inputs)
+        await self._eval(f"""
+        (function() {{
+            var id = {_js_str(entity_id)};
+            var inputs = {overrides};
+            var chart = {_CHART_API};
+            var model = chart.chartWidget().model();
+
+            var study = null;
+
+            // Strategy 1: public API
+            try {{ study = chart.getStudyById(id); }} catch(e) {{}}
+
+            // Strategy 2: dataSourceForId internals
+            if (!study) {{
+                try {{
+                    var ds = model.dataSourceForId(id);
+                    if (ds) {{
+                        if (ds._study) {{
+                            study = ds._study;
+                        }} else if (ds._source) {{
+                            study = ds._source;
+                        }}
+                    }}
+                }} catch(e) {{}}
+            }}
+
+            // Strategy 3: search studies in panes
+            if (!study) {{
+                try {{
+                    var panes = model.panes() || [];
+                    for (var p = 0; p < panes.length; p++) {{
+                        if (!panes[p].dataSources) continue;
+                        var srcs = panes[p].dataSources() || [];
+                        for (var s = 0; s < srcs.length; s++) {{
+                            var src = srcs[s];
+                            var srcId = src.id ? src.id() : src._id || '';
+                            if (srcId === id) {{
+                                study = src._study || src._source || src;
+                                break;
+                            }}
+                        }}
+                        if (study) break;
+                    }}
+                }} catch(e) {{}}
+            }}
+
+            if (!study) throw new Error('Study not found: ' + id);
+
+            for (var k in inputs) {{
+                if (study.setInputValue) {{
+                    study.setInputValue(k, inputs[k]);
+                }} else if (study._inputValues) {{
+                    study._inputValues[k] = inputs[k];
+                }}
+            }}
+
+            if (study.recalc) study.recalc();
+            if (model.fullRecalc) model.fullRecalc();
+            return true;
+        }})()
+        """)
 
     # ------------------------------------------------------------------
     # Pine Script

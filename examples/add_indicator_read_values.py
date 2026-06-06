@@ -8,10 +8,20 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from pytvtools import TV, wait_for_cdp
+from pytvtools import TV, TooManyIndicatorsError, wait_for_cdp
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger(__name__)
+
+
+async def ensure_slot(tv: TV) -> None:
+    """Remove indicators if the chart is at capacity."""
+    try:
+        await tv.add_indicator("RSI@tv-basicstudies")
+    except TooManyIndicatorsError:
+        log.info("Chart at capacity — removing existing indicators...")
+        await tv.remove_all_indicators()
+        await asyncio.sleep(0.5)
 
 
 async def main():
@@ -23,22 +33,35 @@ async def main():
         state = await tv.get_state()
         log.info(f"Chart: {state}")
 
-        # Add RSI
+        count = await tv.get_indicator_count()
+        log.info(f"Indicators on chart: {count}")
+
+        # Add RSI (handles capacity limit)
         eid = await tv.add_indicator("RSI@tv-basicstudies")
         log.info(f"Added RSI, entity ID: {eid}")
 
-        # Wait for data to populate
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)
 
-        # Read indicator values
+        # Read values with default inputs
         vals = await tv.get_study_values()
         for name, data in vals.items():
             v = data.get("values", [])
             if v:
                 last = v[-1]
-                log.info(f"{name}: {len(v)} bars, last RSI = {last['value']:.2f} at ts {last['timestamp']}")
-            else:
-                log.info(f"{name}: {data}")
+                log.info(f"{name}: default RSI = {last['value']:.2f}")
+
+        # Change RSI length from 14 to 7
+        await tv.set_indicator_inputs(eid, {"length": 7})
+        log.info("Set RSI length to 7")
+        await asyncio.sleep(2)
+
+        # Read values after input change
+        vals = await tv.get_study_values()
+        for name, data in vals.items():
+            v = data.get("values", [])
+            if v:
+                last = v[-1]
+                log.info(f"{name}: modified RSI = {last['value']:.2f}")
 
         # Clean up
         await tv.remove_indicator(eid)

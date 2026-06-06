@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from pytvtools.tv import TV
+from pytvtools.tv import TV, TooManyIndicatorsError
 
 
 @pytest.fixture
@@ -112,7 +112,7 @@ class TestChartControl:
         result = await tv.get_visible_range()
         assert result == {"from": 1700000000, "to": 1705000000}
         expr = cdp.evaluate.call_args[0][0]
-        assert "timeRange" in expr
+        assert "visibleRange" in expr or "first()" in expr
 
 
 class TestData:
@@ -175,33 +175,87 @@ class TestIndicators:
 
     async def test_add_indicator(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp.evaluate.return_value = "abc123"
+        cdp.evaluate.side_effect = [[], "abc123"]
         eid = await tv.add_indicator("RSI@tv-basicstudies")
         assert eid == "abc123"
-        expr = cdp.evaluate.call_args[0][0]
+        assert "abc123" in tv._indicator_ids
+        # Second call carries the _createStudy expression
+        expr = cdp.evaluate.call_args_list[1][0][0]
         assert "_createStudy" in expr
         assert "RSI@tv-basicstudies" in expr
         assert "java" in expr
 
     async def test_add_indicator_custom_id(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp.evaluate.return_value = "custom123"
+        cdp.evaluate.side_effect = [[], "custom123"]
         eid = await tv.add_indicator("SFFMev")
         assert eid == "custom123"
-        expr = cdp.evaluate.call_args[0][0]
+        expr = cdp.evaluate.call_args_list[1][0][0]
         assert "SFFMev" in expr
+
+    async def test_add_indicator_limit(self, mock_cdp):
+        tv, cdp = mock_cdp
+        tv._indicator_ids = {"eid1", "eid2"}
+        cdp.evaluate.side_effect = [["eid1", "eid2"]]
+        with pytest.raises(TooManyIndicatorsError):
+            await tv.add_indicator("RSI@tv-basicstudies")
 
     async def test_remove_indicator(self, mock_cdp):
         tv, cdp = mock_cdp
+        tv._indicator_ids = {"abc123"}
         await tv.remove_indicator("abc123")
+        assert "abc123" not in tv._indicator_ids
         expr = cdp.evaluate.call_args[0][0]
         assert "removeEntity" in expr
         assert "abc123" in expr
 
+    async def test_remove_all_indicators(self, mock_cdp):
+        tv, cdp = mock_cdp
+        tv._indicator_ids = {"eid1", "eid2"}
+        await tv.remove_all_indicators()
+        assert tv._indicator_ids == set()
+        expr = cdp.evaluate.call_args[0][0]
+        assert "removeAllStudies" in expr
+
     async def test_add_indicator_uses_await_promise(self, mock_cdp):
         tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [[], "abc123"]
         await tv.add_indicator("RSI@tv-basicstudies")
-        assert cdp.evaluate.call_args[1].get("await_promise") is True
+        assert cdp.evaluate.call_args_list[1][1].get("await_promise") is True
+
+    async def test_set_indicator_inputs(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.return_value = True
+        await tv.set_indicator_inputs("abc123", {"length": 20, "source": "close"})
+        expr = cdp.evaluate.call_args[0][0]
+        assert "dataSourceForId" in expr
+        assert "_study" in expr
+
+    async def test_set_indicator_inputs_empty(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.return_value = True
+        await tv.set_indicator_inputs("abc123", {})
+        expr = cdp.evaluate.call_args[0][0]
+        assert "fullRecalc" in expr
+
+    async def test_get_indicator_count(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.return_value = ["eid1", "eid2"]
+        count = await tv.get_indicator_count()
+        assert count == 2
+
+    async def test_get_indicator_count_empty(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.return_value = []
+        count = await tv.get_indicator_count()
+        assert count == 0
+
+    async def test_set_indicator_inputs_empty(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.return_value = True
+        await tv.set_indicator_inputs("abc123", {})
+        expr = cdp.evaluate.call_args[0][0]
+        assert "fullRecalc" in expr
 
 
 class TestPineDrawings:
@@ -338,15 +392,20 @@ class TestErrorHandling:
 
     async def test_eval_uses_cdp_evaluate(self, mock_cdp):
         tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [[], None]
         await tv.connect()
         await tv._eval("1 + 1")
-        cdp.evaluate.assert_awaited_once_with("1 + 1")
+        call = cdp.evaluate.call_args_list[-1]
+        assert call[0][0] == "1 + 1"
 
     async def test_eval_passes_kwargs(self, mock_cdp):
         tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [[], None]
         await tv.connect()
         await tv._eval("Promise.resolve(42)", await_promise=True)
-        cdp.evaluate.assert_awaited_once_with("Promise.resolve(42)", await_promise=True)
+        call = cdp.evaluate.call_args_list[-1]
+        assert call[0][0] == "Promise.resolve(42)"
+        assert call[1].get("await_promise") is True
 
 
 class TestScriptGeneration:

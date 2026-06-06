@@ -14,23 +14,18 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger(__name__)
 
 WATCHLIST = ["NASDAQ:AAPL", "NASDAQ:NVDA", "NASDAQ:TSLA", "BITSTAMP:BTCUSD"]
+TIMEFRAMES = ["D", "60"]
 
 
 async def main():
     await wait_for_cdp(timeout=10)
 
     async with TV(port=9222) as tv:
-        for symbol in WATCHLIST:
-            log.info(f"Scanning {symbol}...")
-            await tv.set_symbol(symbol)
-            await asyncio.sleep(0.5)
-
-            state = await tv.get_state()
-            quote = await tv.get_quote()
-            studies = await tv.get_study_values()
-
-            rsi = studies.get("Relative Strength Index", {})
-            log.info(f"  {symbol} — {state.get('timeframe')} | RSI: {rsi}")
+        results = await tv.batch(WATCHLIST, TIMEFRAMES, action="studies")
+        for symbol, tfs in results.items():
+            for tf, studies in tfs.items():
+                rsi = studies.get("Relative Strength Index", {})
+                log.info(f"{symbol} ({tf}) — RSI: {rsi}")
 
     log.info("Scan complete.")
 
