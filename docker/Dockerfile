@@ -9,11 +9,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
-
-# Copy and install pytvtools
-COPY . .
-RUN pip install --no-cache-dir .
+# Pre-install runtime deps (cached layer — only re-runs if deps change).
+# pytvtools itself is installed editable at container start from the bind mount.
+RUN pip install --no-cache-dir httpx websockets
 
 ENV TV_CDP_PORT=9222
 ENV TV_URL=https://www.tradingview.com/chart/

@@ -7,6 +7,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Editable install so source from the bind mount is reflected without rebuild
+pip install --no-cache-dir -e /app > /dev/null 2>&1
+
+# Remove stale Chrome lock files from unclean shutdown
+rm -f "$TV_USER_DATA_DIR/SingletonLock" "$TV_USER_DATA_DIR/SingletonCookie" "$TV_USER_DATA_DIR/SingletonSocket"
+
 # Chrome M113+ ignores --remote-debugging-address=0.0.0.0 and binds only
 # to 127.0.0.1.  We give it an *internal* port and use socat on 0.0.0.0
 # so Docker port-publishing can reach the CDP endpoint.
