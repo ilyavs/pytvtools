@@ -27,6 +27,9 @@ USER_DATA_DIR = os.environ.get(
 
 
 def _find_chrome() -> str | None:
+    override = os.environ.get("TV_CHROME_BINARY")
+    if override and (os.path.isfile(override) or shutil.which(override)):
+        return override
     system = platform.system()
     if system == "Windows":
         candidates = [

@@ -102,6 +102,43 @@ async def list_tools() -> list[Tool]:
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
+            name="set_chart_type",
+            description="Change chart type (Candles=1, Line=2, Area=3)",
+            inputSchema={
+                "type": "object",
+                "properties": {"chart_type": {"type": ["integer", "string"], "description": "Candles=1, Line=2, Area=3"}},
+                "required": ["chart_type"],
+            },
+        ),
+        Tool(
+            name="get_visible_range",
+            description="Visible date range from the chart",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="scroll_to_date",
+            description="Jump the chart to a specific date",
+            inputSchema={
+                "type": "object",
+                "properties": {"date": {"type": "string", "description": "ISO date (2025-01-15) or unix timestamp"}},
+                "required": ["date"],
+            },
+        ),
+        Tool(
+            name="pine_set_source",
+            description="Set Pine Script source in the editor",
+            inputSchema={
+                "type": "object",
+                "properties": {"source": {"type": "string"}},
+                "required": ["source"],
+            },
+        ),
+        Tool(
+            name="pine_compile",
+            description="Compile Pine Script and return errors",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
             name="batch",
             description="Scan multiple symbols/timeframes",
             inputSchema={
@@ -116,6 +153,58 @@ async def list_tools() -> list[Tool]:
                     },
                 },
                 "required": ["symbols", "timeframes"],
+            },
+        ),
+        Tool(
+            name="search_indicators",
+            description="Search for indicators by keyword. Returns list of {id, name}.",
+            inputSchema={
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        ),
+        Tool(
+            name="add_indicator",
+            description="Add an indicator by study ID or display name. Returns entity ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "indicator": {"type": "string", "description": "Study ID (RSI@tv-basicstudies) or display name (Relative Strength Index)"},
+                    "inputs": {"type": "object", "description": "Optional input overrides, e.g. {\"length\": 20}"},
+                },
+                "required": ["indicator"],
+            },
+        ),
+        Tool(
+            name="remove_indicator",
+            description="Remove an indicator by entity ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {"entity_id": {"type": "string"}},
+                "required": ["entity_id"],
+            },
+        ),
+        Tool(
+            name="remove_all_indicators",
+            description="Remove all indicators from the chart.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="get_indicator_count",
+            description="Number of indicators currently on the chart.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="set_indicator_inputs",
+            description="Change input values on an existing indicator.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "entity_id": {"type": "string"},
+                    "inputs": {"type": "object"},
+                },
+                "required": ["entity_id", "inputs"],
             },
         ),
     ]
@@ -142,7 +231,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             elif name == "get_study_values":
                 result = await tv.get_study_values()
             elif name == "get_quote":
-                result = await tv.get_quote(arguments.get("symbol"))
+                result = await tv.get_quote()
             elif name == "get_pine_lines":
                 result = await tv.get_pine_lines(arguments.get("study_filter"))
             elif name == "get_pine_labels":
@@ -151,13 +240,47 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     max_labels=arguments.get("max_labels", 50),
                 )
             elif name == "capture_screenshot":
-                result = {"data": (await tv.capture_screenshot())[:80] + "..."}
+                result = {"data": await tv.capture_screenshot()}
+            elif name == "set_chart_type":
+                await tv.set_chart_type(arguments["chart_type"])
+                result = {"ok": True}
+            elif name == "get_visible_range":
+                result = await tv.get_visible_range()
+            elif name == "scroll_to_date":
+                await tv.scroll_to_date(arguments["date"])
+                result = {"ok": True}
+            elif name == "pine_set_source":
+                await tv.pine_set_source(arguments["source"])
+                result = {"ok": True}
+            elif name == "pine_compile":
+                result = await tv.pine_compile()
             elif name == "batch":
                 result = await tv.batch(
                     symbols=arguments["symbols"],
                     timeframes=arguments["timeframes"],
                     action=arguments.get("action", "ohlcv"),
                 )
+            elif name == "search_indicators":
+                result = await tv.search_indicators(arguments["query"])
+            elif name == "add_indicator":
+                result = await tv.add_indicator(
+                    indicator=arguments["indicator"],
+                    inputs=arguments.get("inputs"),
+                )
+            elif name == "remove_indicator":
+                await tv.remove_indicator(arguments["entity_id"])
+                result = {"ok": True}
+            elif name == "remove_all_indicators":
+                await tv.remove_all_indicators()
+                result = {"ok": True}
+            elif name == "get_indicator_count":
+                result = {"count": await tv.get_indicator_count()}
+            elif name == "set_indicator_inputs":
+                await tv.set_indicator_inputs(
+                    entity_id=arguments["entity_id"],
+                    inputs=arguments["inputs"],
+                )
+                result = {"ok": True}
             else:
                 raise ValueError(f"Unknown tool: {name}")
 

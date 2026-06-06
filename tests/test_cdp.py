@@ -126,17 +126,6 @@ class TestCdpConnection:
             obj = await cdp.evaluate("document", return_by_value=False)
         assert obj == "abc123"
 
-    async def test_evaluate_async_shorthand(self, mock_ws):
-        mock_ws.recv.side_effect = [
-            json.dumps({"id": 1, "result": {}}),
-            json.dumps({"id": 2, "result": {"result": {"value": "async"}}}),
-        ]
-        with patch("websockets.connect", AsyncMock(return_value=mock_ws)):
-            cdp = CdpConnection("ws://localhost:9222/devtools/page/abc")
-            await cdp.connect()
-            val = await cdp.evaluate_async("Promise.resolve('async')")
-        assert val == "async"
-
     async def test_send_increments_message_id(self, mock_ws):
         mock_ws.recv.side_effect = [
             json.dumps({"id": 1, "result": {}}),

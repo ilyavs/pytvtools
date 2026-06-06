@@ -11,17 +11,22 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
 
-from pytvtools.cdp import CdpConnection, find_tv_target, make_ws_url, wait_for_cdp
+from pytvtools.cdp import CdpConnection, CdpError, find_tv_target, make_ws_url
 
 logger = logging.getLogger(__name__)
 
-MAX_INDICATORS = 2
+MAX_INDICATORS = int(os.environ.get("TV_MAX_INDICATORS", "2"))
 
 
 class TooManyIndicatorsError(RuntimeError):
     """Raised when adding an indicator would exceed MAX_INDICATORS."""
+
+
+class SymbolNotFoundError(RuntimeError):
+    """Raised when the requested symbol is not found or fails to load."""
 
 
 # ---------------------------------------------------------------------------
@@ -47,9 +52,6 @@ def _chart_call(method: str, *args: Any) -> str:
     a = ", ".join(json.dumps(a) for a in args)
     return f"({_CHART_API}.{method}({a}))"
 
-
-def _chart_set(method: str, value: Any) -> str:
-    return f"({_CHART_API}.{method}({json.dumps(value)})),Symbols !== 'undefined'"
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +124,34 @@ class TV:
         return await self._eval(js)
 
     async def set_symbol(self, symbol: str) -> None:
+        import asyncio
+        prev = await self._eval(f"({_CHART_API}.symbol())")
         await self._eval(f"({_CHART_API}.setSymbol({_js_str(symbol)}))")
+        for _ in range(15):
+            await asyncio.sleep(0.3)
+            current = await self._eval(f"({_CHART_API}.symbol())")
+            if current != prev:
+                break
+        else:
+            raise SymbolNotFoundError(
+                f"Symbol '{symbol}' not found — chart did not change"
+            )
+        for _ in range(10):
+            await asyncio.sleep(0.3)
+            has_bars = await self._eval(f"""
+            (function() {{
+                try {{
+                    var items = {_CHART_API}.chartWidget().model()
+                        .mainSeries().bars()._items;
+                    return items && items.length > 0;
+                }} catch(e) {{ return false; }}
+            }})()
+            """)
+            if has_bars:
+                return
+        raise SymbolNotFoundError(
+            f"Symbol '{symbol}' resolved but no data loaded"
+        )
 
     async def set_timeframe(self, timeframe: str) -> None:
         await self._eval(f"({_CHART_API}.setResolution({_js_str(timeframe)}))")
@@ -203,7 +232,7 @@ class TV:
         """
         return await self._eval(js)
 
-    async def get_quote(self, symbol: str | None = None) -> dict[str, Any]:
+    async def get_quote(self) -> dict[str, Any]:
         return await self._eval(f"""
         (function() {{
             var s = {_CHART_API}.symbol();
@@ -242,13 +271,155 @@ class TV:
     # Indicators
     # ------------------------------------------------------------------
 
-    async def add_indicator(
-        self, study_id: str, inputs: dict[str, Any] | None = None
-    ) -> str | None:
-        """Add an indicator by study ID (e.g. 'RSI@tv-basicstudies').
+    @staticmethod
+    def _decode_study_name(raw: str) -> str:
+        """Decode TV's URL-encoded study name (``%1`` → space, etc.)."""
+        import urllib.parse
+        return urllib.parse.unquote(raw)
 
-        Returns the entity ID of the created study, or None on failure.
-        Raises TooManyIndicatorsError if MAX_INDICATORS would be exceeded.
+    async def search_indicators(self, query: str) -> list[dict[str, Any]]:
+        """Search for indicators by keyword.
+
+        Returns a list of dicts, each with keys:
+          - ``id``       — data-id attribute (e.g. ``STD;RSI``)
+          - ``name``     — display name (e.g. ``Relative Strength Index``)
+          - ``study_id`` — usable with :meth:`add_indicator`
+                           (e.g. ``RSI@tv-basicstudies`` for built-ins,
+                           or raw ``PUB;85`` for community scripts).
+        """
+        import asyncio
+
+        q = query.lower()
+
+        # Ensure search dialog is open
+        await self._eval("""
+        (function() {
+            var d = window.TradingViewApi._studyMarket._dialog;
+            if (d && d._props) return;
+            var btn = document.querySelector('[data-name=open-indicators-dialog]');
+            if (btn) { btn.click(); }
+        })()
+        """)
+        await asyncio.sleep(1.5)
+
+        results = await self._eval(f"""
+        (function() {{
+            var d = window.TradingViewApi._studyMarket._dialog;
+            if (!d) return [];
+
+            var out = [];
+            var seen = {{}};
+
+            // Built-in studies (already loaded)
+            var std = d._studies['Script$STD'] || {{}};
+            var keys = Object.keys(std);
+            for (var i = 0; i < keys.length; i++) {{
+                var s = std[keys[i]];
+                if (s.title && s.title.toLowerCase().indexOf({_js_str(q)}) >= 0) {{
+                    if (seen[s.id]) continue;
+                    seen[s.id] = true;
+                    out.push({{id: s.id, name: s.title, publisher: ''}});
+                }}
+            }}
+
+            return out;
+        }})()
+        """)
+        results = results or []
+
+        # Trigger server-side search for community scripts
+        await self._eval(f"""
+        (function() {{
+            var d = window.TradingViewApi._studyMarket._dialog;
+            if (d && d._handleSearch) d._handleSearch({_js_str(query)});
+        }})()
+        """)
+        await asyncio.sleep(2)
+
+        # Read community results from the dialog's search results
+        pub_results = await self._eval("""
+        (function() {
+            var dlg = window.TradingViewApi._studyMarket._dialog;
+            if (!dlg || !dlg._props) return [];
+            var sr = dlg._props._value.searchResults;
+            if (!sr) return [];
+            var out = [];
+            var seen = {};
+            for (var t = 0; t < sr.length; t++) {
+                var tab = sr[t];
+                var content = tab.content || tab.filteredContent;
+                if (!content) continue;
+                var items = Array.isArray(content) ? content : [];
+                for (var j = 0; j < items.length; j++) {
+                    var item = items[j];
+                    if (!item || !item.id) continue;
+                    if (seen[item.id]) continue;
+                    seen[item.id] = true;
+                    var pub = item.public;
+                    out.push({
+                        id: item.id,
+                        name: item.title || '',
+                        publisher: pub ? (pub.authorName || '') : '',
+                    });
+                }
+            }
+            return out;
+        })()
+        """)
+        pub_results = pub_results or []
+
+        # Merge: built-ins first, then community (dedup by id)
+        seen_ids = {r["id"] for r in results}
+        for r in pub_results:
+            if r["id"] not in seen_ids:
+                seen_ids.add(r["id"])
+                results.append(r)
+
+        # Enrich with study_id
+        for r in results:
+            raw_id = r["id"]
+            if raw_id.startswith("STD;"):
+                name = self._decode_study_name(raw_id[4:])
+                r["study_id"] = f"{name}@tv-basicstudies"
+            else:
+                r["study_id"] = raw_id
+
+        # Close the search dialog
+        await self._eval("""
+        (function() {
+            var btn = document.querySelector('[data-name="close-indicators-dialog"], .dialog-close');
+            if (btn) { btn.click(); return; }
+            var esc = new KeyboardEvent('keydown', {key: 'Escape', code: 'Escape', keyCode: 27});
+            document.dispatchEvent(esc);
+        })()
+        """)
+
+        return results
+
+    async def add_indicator(
+        self, indicator: str, inputs: dict[str, Any] | None = None
+    ) -> str | None:
+        """Add an indicator by study ID **or** display name.
+
+        Parameters
+        ----------
+        indicator : str
+            Either a study ID (``RSI@tv-basicstudies``) or a display name
+            (``Relative Strength Index``).  Display names are looked up
+            via TV's own ``createStudy`` API.
+        inputs : dict or None
+            Optional input overrides applied after creation.
+
+        Returns
+        -------
+        str or None
+            Entity ID of the created study, or ``None`` if the indicator
+            could not be found.
+
+        Raises
+        ------
+        TooManyIndicatorsError
+            If the chart already has ``MAX_INDICATORS`` indicators.
         """
         self._indicator_ids = set(await self._get_study_ids())
         if len(self._indicator_ids) >= MAX_INDICATORS:
@@ -256,14 +427,38 @@ class TV:
                 f"Chart already has {len(self._indicator_ids)} indicators "
                 f"(max {MAX_INDICATORS}). Remove one first."
             )
-        expr = f"""
-        (function() {{
-            return {_CHART_API}._createStudy({{type: "java", studyId: {_js_str(study_id)}}});
-        }})()
-        """
-        eid = await self._eval(expr, await_promise=True)
+
+        if "@" in indicator:
+            # Built-in study ID — use _createStudy
+            eid = await self._eval(f"""
+            (function() {{
+                return {_CHART_API}._createStudy({{type: "java", studyId: {_js_str(indicator)}}});
+            }})()
+            """, await_promise=True)
+        elif indicator.startswith("PUB;"):
+            # Community script — use _createStudy with pine type
+            eid = await self._eval(f"""
+            (function() {{
+                return {_CHART_API}._createStudy({{type: "pine", pineId: {_js_str(indicator)}}});
+            }})()
+            """, await_promise=True)
+        else:
+            # Display name — use public createStudy
+            try:
+                eid = await self._eval(f"""
+                (function() {{
+                    return {_CHART_API}.createStudy({_js_str(indicator)});
+                }})()
+                """, await_promise=True)
+            except CdpError:
+                eid = None
+
         if eid:
             self._indicator_ids.add(eid)
+
+        if inputs and eid:
+            await self.set_indicator_inputs(eid, inputs)
+
         return eid
 
     async def remove_indicator(self, entity_id: str) -> None:
@@ -361,8 +556,21 @@ class TV:
 
     async def pine_compile(self) -> dict[str, Any]:
         """Click the compile button and return errors (if any)."""
-        await self._ui_click("compile_errors")
-        # Wait briefly for compilation
+        await self._eval("""
+        (function() {
+            var btns = document.querySelectorAll('button');
+            for (var i = 0; i < btns.length; i++) {
+                var b = btns[i];
+                var aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                var text = (b.textContent || '').trim().toLowerCase();
+                if (aria.indexOf('compile') >= 0 || text.indexOf('add to chart') >= 0) {
+                    b.click();
+                    return;
+                }
+            }
+            throw new Error('Compile button not found');
+        })()
+        """)
         import asyncio
         await asyncio.sleep(1)
         errors = await self._eval("""
@@ -417,7 +625,7 @@ class TV:
     # Screenshot
     # ------------------------------------------------------------------
 
-    async def capture_screenshot(self, region: str = "chart") -> str:
+    async def capture_screenshot(self) -> str:
         """Returns base64-encoded PNG."""
         if not self._cdp:
             raise RuntimeError("Not connected")
@@ -435,21 +643,30 @@ class TV:
         self, symbols: list[str], timeframes: list[str], action: str = "ohlcv"
     ) -> dict[str, Any]:
         """Iterate symbols/timeframes and collect data."""
-        results = {}
-        for sym in symbols:
-            await self.set_symbol(sym)
-            import asyncio
+        state = await self.get_state()
+        original_symbol = state["symbol"]
+        original_tf = state["timeframe"]
 
-            await asyncio.sleep(0.3)
-            sym_data = {}
-            for tf in timeframes:
-                await self.set_timeframe(tf)
-                await asyncio.sleep(0.2)
-                if action == "ohlcv":
-                    sym_data[tf] = await self.get_ohlcv(summary=True)
-                elif action == "studies":
-                    sym_data[tf] = await self.get_study_values()
-            results[sym] = sym_data
+        import asyncio
+
+        results = {}
+        try:
+            for sym in symbols:
+                await self.set_symbol(sym)
+                await asyncio.sleep(0.3)
+                sym_data = {}
+                for tf in timeframes:
+                    await self.set_timeframe(tf)
+                    await asyncio.sleep(0.2)
+                    if action == "ohlcv":
+                        sym_data[tf] = await self.get_ohlcv(summary=True)
+                    elif action == "studies":
+                        sym_data[tf] = await self.get_study_values()
+                results[sym] = sym_data
+        finally:
+            await self.set_symbol(original_symbol)
+            await self.set_timeframe(original_tf)
+
         return results
 
     # ------------------------------------------------------------------

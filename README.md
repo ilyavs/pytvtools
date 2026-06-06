@@ -50,27 +50,31 @@ This prints the command — copy-paste it to launch Chrome.
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `get_state()` | `{symbol, timeframe, chartType}` | Current symbol, timeframe, chart type |
-| `set_symbol(symbol: str)` | — | Change ticker |
-| `set_timeframe(tf: str)` | — | Change resolution (`D`, `60`, `15`, `5`, `1`, `W`, `M`) |
-| `set_chart_type(t: int \| str)` | — | Candles=1, Line=2, Area=3 |
-| `scroll_to_date(date: str)` | — | Jump to a date (`"2025-01-15"`) |
-| `get_visible_range()` | `{from: int, to: int}` | Visible date range (unix timestamps) |
+| `set_symbol(symbol)` | — | Change ticker |
+| `set_timeframe(tf)` | — | Change resolution (`D`, `60`, `15`, `5`, `1`, `W`, `M`) |
+| `set_chart_type(t)` | — | Candles=1, Line=2, Area=3 |
+| `scroll_to_date(date)` | — | Jump to a date (`"2025-01-15"`) |
+| `get_visible_range()` | `{from, to}` | Visible date range (unix timestamps) |
 
 ### Data
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `get_ohlcv(count=500, summary=False)` | `list[bar]` or summary dict | Price bars or compact stats |
+| `get_ohlcv(count=500, summary=False)` | `list[bar]` or dict | Price bars or compact stats |
 | `get_study_values()` | `{name: {title, values}}` | All visible indicator plot values |
-| `get_quote()` | `{symbol: str}` | Current symbol name |
+| `get_quote()` | `{symbol: str}` | Current symbol |
 | `capture_screenshot()` | `str` | Base64 PNG |
 
 ### Indicators
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `add_indicator(study_id, inputs=None)` | `str \| None` | Add by ID (e.g. `"RSI@tv-basicstudies"`), returns entity ID |
+| `search_indicators(query)` | `list[{id, name, study_id}]` | Search by keyword — includes built-in + community |
+| `add_indicator(indicator, inputs=None)` | `str \| None` | Add by study ID or display name |
 | `remove_indicator(entity_id)` | — | Remove by entity ID |
+| `remove_all_indicators()` | — | Remove all studies |
+| `set_indicator_inputs(entity_id, inputs)` | — | Change input values on an existing indicator |
+| `get_indicator_count()` | `int` | Number of indicators currently on the chart |
 
 ### Pine Script drawings
 
@@ -83,22 +87,25 @@ This prints the command — copy-paste it to launch Chrome.
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `pine_set_source(source: str)` | — | Inject source into the Pine editor |
-| `pine_compile()` | `{errors: [...]}` | Compile Pine code and return errors |
+| `pine_set_source(source)` | — | Inject source into the Pine editor |
+| `pine_compile()` | `{errors}` | Compile and return errors |
 
 ### Multi-symbol
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `batch(symbols, timeframes, action="ohlcv")` | `{symbol: {tf: data}}` | Scan multiple symbols/timeframes |
+| `batch(symbols, timeframes, action)` | `{symbol: {tf: data}}` | Scan multiple symbols/timeframes |
 
 ## Examples
 
 ```
 examples/
   basic.py                      — connect, state, OHLCV, study values
+  chart_control.py              — symbol, timeframe, chart type, scroll, visible range
   add_indicator_read_values.py  — add RSI, read values, remove
   multi_symbol_scan.py          — iterate symbols, read indicators
+  pine_interaction.py           — inject Pine Script, compile, read errors
+  search_and_add_indicator.py   — search built-in & community, add by study_id
 ```
 
 ```bash
@@ -125,7 +132,7 @@ pytest tests/ -m "not integration" -v
 pytest tests/ -m integration -v --capture=no
 ```
 
-83 unit tests mock everything. 3 integration tests run every example against real TV.
+106 unit tests mock everything. 6 integration tests run every example against real TV.
 
 ## TradingView JS API reference
 
@@ -143,7 +150,7 @@ pip install pytvtools[mcp]
 pytvtools-mcp
 ```
 
-Exposes a **subset** of TV operations as MCP tools: `get_state`, `set_symbol`, `set_timeframe`, `get_ohlcv`, `get_study_values`, `get_quote`, `get_pine_lines`, `get_pine_labels`, `capture_screenshot`, `batch`.
+Exposes all TV methods as MCP tools.
 
 ## Deployment
 

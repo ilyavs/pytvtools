@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from pytvtools.tv import TV, TooManyIndicatorsError
+from pytvtools.tv import TV, TooManyIndicatorsError, SymbolNotFoundError
 
 
 @pytest.fixture
@@ -80,10 +80,33 @@ class TestChartControl:
 
     async def test_set_symbol(self, mock_cdp):
         tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            "NASDAQ:AAPL",  # prev
+            None,            # setSymbol
+            "BTCUSD",        # symbol poll (changed)
+            True,            # bars check
+        ]
         await tv.set_symbol("BTCUSD")
-        expr = cdp.evaluate.call_args[0][0]
+        expr = cdp.evaluate.call_args_list[1][0][0]
         assert "setSymbol" in expr
         assert "BTCUSD" in expr
+
+    async def test_set_symbol_not_found(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.return_value = "SAME"
+        with pytest.raises(SymbolNotFoundError, match="FAKE"):
+            await tv.set_symbol("FAKE")
+
+    async def test_set_symbol_no_data(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            "OLD",           # prev
+            None,            # setSymbol
+            "DIFFERENT",     # symbol poll (changed — breaks first loop)
+            False, False, False, False, False, False, False, False, False, False,  # bars check x10
+        ]
+        with pytest.raises(SymbolNotFoundError, match="no data loaded"):
+            await tv.set_symbol("NODATA")
 
     async def test_set_timeframe(self, mock_cdp):
         tv, cdp = mock_cdp
@@ -223,6 +246,71 @@ class TestIndicators:
         await tv.add_indicator("RSI@tv-basicstudies")
         assert cdp.evaluate.call_args_list[1][1].get("await_promise") is True
 
+    async def test_add_indicator_display_name(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [[], "abc123"]
+        eid = await tv.add_indicator("Relative Strength Index")
+        assert eid == "abc123"
+        assert "abc123" in tv._indicator_ids
+        # Should use createStudy (public API), not _createStudy
+        expr = cdp.evaluate.call_args_list[1][0][0]
+        assert "createStudy" in expr
+        assert "_createStudy" not in expr
+        assert "Relative Strength Index" in expr
+
+    async def test_add_indicator_display_name_not_found(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [[], None]  # createStudy returned None
+        eid = await tv.add_indicator("NonExistent Indicator")
+        assert eid is None
+        assert len(tv._indicator_ids) == 0
+
+    async def test_add_indicator_pub_id(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [[], "pub123"]
+        eid = await tv.add_indicator("PUB;85")
+        assert eid == "pub123"
+        assert "pub123" in tv._indicator_ids
+        expr = cdp.evaluate.call_args_list[1][0][0]
+        assert "_createStudy" in expr
+        assert "PUB;85" in expr
+        assert "pine" in expr
+
+    async def test_add_indicator_with_inputs(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [[], "abc123", True]
+        eid = await tv.add_indicator("RSI@tv-basicstudies", inputs={"length": 14})
+        assert eid == "abc123"
+        # Call 1: _get_study_ids, Call 2: _createStudy, Call 3: set_indicator_inputs
+        assert len(cdp.evaluate.call_args_list) == 3
+        expr1 = cdp.evaluate.call_args_list[1][0][0]
+        assert "_createStudy" in expr1
+        assert "RSI@tv-basicstudies" in expr1
+        expr2 = cdp.evaluate.call_args_list[2][0][0]
+        assert "dataSourceForId" in expr2
+        assert "length" in expr2
+
+    async def test_add_indicator_with_inputs_display_name(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [[], "abc123", True]
+        eid = await tv.add_indicator("Relative Strength Index", inputs={"length": 14})
+        assert eid == "abc123"
+        assert len(cdp.evaluate.call_args_list) == 3
+        expr1 = cdp.evaluate.call_args_list[1][0][0]
+        assert "createStudy" in expr1
+        assert "_createStudy" not in expr1
+        expr2 = cdp.evaluate.call_args_list[2][0][0]
+        assert "dataSourceForId" in expr2
+        assert "length" in expr2
+
+    async def test_add_indicator_with_inputs_no_eid(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [[], None]  # creation returned None
+        eid = await tv.add_indicator("RSI@tv-basicstudies", inputs={"length": 14})
+        assert eid is None
+        # Should NOT have called set_indicator_inputs (only 2 calls)
+        assert len(cdp.evaluate.call_args_list) == 2
+
     async def test_set_indicator_inputs(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.return_value = True
@@ -250,12 +338,97 @@ class TestIndicators:
         count = await tv.get_indicator_count()
         assert count == 0
 
-    async def test_set_indicator_inputs_empty(self, mock_cdp):
+
+class TestIndicatorSearch:
+    """Indicator search via internal registry + _handleSearch."""
+
+    async def test_search_indicators(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp.evaluate.return_value = True
-        await tv.set_indicator_inputs("abc123", {})
-        expr = cdp.evaluate.call_args[0][0]
-        assert "fullRecalc" in expr
+        cdp.evaluate.side_effect = [
+            None,  # 0: dialog open
+            [{"id": "STD;RSI", "name": "Relative Strength Index"}],  # 1: built-in
+            None,  # 2: _handleSearch
+            [   # 3: community
+                {"id": "PUB;131", "name": "RSI Candles"},
+                {"id": "PUB;197", "name": "RSI Bands"},
+            ],
+            None,  # 4: dialog close
+        ]
+        results = await tv.search_indicators("RSI")
+        assert len(results) == 3
+        # built-in first
+        assert results[0]["id"] == "STD;RSI"
+        assert results[0]["name"] == "Relative Strength Index"
+        assert results[0]["study_id"] == "RSI@tv-basicstudies"
+        # then community
+        assert results[1]["id"] == "PUB;131"
+        assert results[1]["study_id"] == "PUB;131"
+        # Verify _handleSearch was called (index 2, after dialog open and built-in search)
+        search_expr = cdp.evaluate.call_args_list[2][0][0]
+        assert "_handleSearch" in search_expr
+
+    async def test_search_indicators_empty(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            None,  # dialog open
+            [],   # no built-in matches
+            None, # _handleSearch
+            [],   # no community matches
+            None, # dialog close
+        ]
+        results = await tv.search_indicators("zzzz")
+        assert results == []
+
+    async def test_search_indicators_only_builtin(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            None,  # dialog open
+            [{"id": "STD;RSI", "name": "Relative Strength Index"}],
+            None,
+            [],   # no community matches
+            None, # dialog close
+        ]
+        results = await tv.search_indicators("RSI")
+        assert len(results) == 1
+        assert results[0]["study_id"] == "RSI@tv-basicstudies"
+
+    async def test_search_indicators_only_community(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            None,  # dialog open
+            [],   # no built-in matches
+            None,
+            [{"id": "PUB;42", "name": "DSS Bressert"}],
+            None, # dialog close
+        ]
+        results = await tv.search_indicators("DSS")
+        assert len(results) == 1
+        assert results[0]["id"] == "PUB;42"
+        assert results[0]["study_id"] == "PUB;42"
+
+    async def test_search_indicators_none_results(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            None, # dialog open
+            None, # built-in query returned None
+            None,
+            None, # community query returned None
+            None, # dialog close
+        ]
+        results = await tv.search_indicators("RSI")
+        assert results == []
+
+    async def test_search_indicators_dedup(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            None,  # dialog open
+            [{"id": "STD;RSI", "name": "Relative Strength Index"}],
+            None,
+            [{"id": "STD;RSI", "name": "Relative Strength Index"}],  # same ID from community
+            None, # dialog close
+        ]
+        results = await tv.search_indicators("RSI")
+        assert len(results) == 1  # deduplicated
 
 
 class TestPineDrawings:
@@ -336,14 +509,28 @@ class TestBatch:
 
     async def test_batch_ohlcv(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp.evaluate.return_value = None
+        cdp.evaluate.side_effect = [
+            {"symbol": "BTCUSD", "timeframe": "D", "chartType": 1},  # get_state
+            "prev", None, "AAPL", True,  # set_symbol (prev, setSymbol, poll, bars)
+            None,                          # set_timeframe
+            {"count": 3, "high": 150, "low": 100, "open": 120, "close": 140, "avg_volume": 1000000, "range": "50.00"},  # get_ohlcv
+            "prev", None, "BTCUSD", True,  # restore set_symbol
+            None,                          # restore set_timeframe
+        ]
         result = await tv.batch(["AAPL"], ["D"], action="ohlcv")
         assert "AAPL" in result
         assert "D" in result["AAPL"]
 
     async def test_batch_studies(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp.evaluate.return_value = {}
+        cdp.evaluate.side_effect = [
+            {"symbol": "BTCUSD", "timeframe": "D", "chartType": 1},  # get_state
+            "prev", None, "AAPL", True,  # set_symbol (prev, setSymbol, poll, bars)
+            None,                          # set_timeframe
+            {"RSI": {"title": "RSI", "values": [{"timestamp": 1, "value": 50}]}},
+            "prev", None, "BTCUSD", True,  # restore set_symbol
+            None,                          # restore set_timeframe
+        ]
         result = await tv.batch(["AAPL"], ["D"], action="studies")
         assert "AAPL" in result
 
@@ -432,3 +619,16 @@ class TestScriptGeneration:
         assert "TradingViewApi.chart()" in expr
         assert "dataSourceForId" in expr
         assert "_data._items" in expr
+
+
+class TestDecodeStudyName:
+    """_decode_study_name static method."""
+
+    def test_simple_name(self):
+        assert TV._decode_study_name("STD;RSI") == "STD;RSI"
+
+    def test_url_encoded_name(self):
+        assert TV._decode_study_name("STD;Bollinger%20Bands") == "STD;Bollinger Bands"
+
+    def test_special_chars(self):
+        assert TV._decode_study_name("STD;RSI%2B") == "STD;RSI+"

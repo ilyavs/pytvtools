@@ -33,16 +33,20 @@ await chrome.stop()
 ## All TV methods
 
 - `get_state()` → `{symbol, timeframe, chartType}`
-- `set_symbol(symbol: str)`
-- `set_timeframe(tf: str)` — "D", "60", "15", etc.
-- `set_chart_type(t: int | str)` — Candles=1, Line=2, etc.
-- `scroll_to_date(date: str)` — "2025-01-15" or unix ts
+- `set_symbol(symbol)`
+- `set_timeframe(tf)` — "D", "60", "15", etc.
+- `set_chart_type(t)` — Candles=1, Line=2, etc.
+- `scroll_to_date(date)` — "2025-01-15" or unix ts
 - `get_visible_range()` → `{from, to}`
 - `get_ohlcv(count=500, summary=False)` → bars or stats
-- `get_quote(symbol=None)` → real-time price
-- `get_study_values()` → `{indicator_name: {title, values: [{timestamp, value}]}}`
-- `add_indicator(study_id)` — e.g. `"RSI@tv-basicstudies"`, returns entity ID
+- `get_quote()` → `{symbol: str}`
+- `get_study_values()` → `{name: {title, values: [{timestamp, value}]}}`
+- `search_indicators(query)` → `[{id, name, study_id}]`
+- `add_indicator(indicator, inputs=None)` → entity ID (e.g. `"RSI@tv-basicstudies"`)
 - `remove_indicator(entity_id)`
+- `remove_all_indicators()`
+- `set_indicator_inputs(entity_id, inputs)`
+- `get_indicator_count()` → `int`
 - `capture_screenshot()` → base64 PNG
 - `get_pine_lines(study_filter=None)` → price levels
 - `get_pine_labels(study_filter=None, max_labels=50)` → text labels
@@ -57,7 +61,7 @@ await chrome.stop()
 # then run: pytvtools-mcp
 ```
 
-Registers all TV methods as MCP tools. Agent calls them like any other tool.
+Registers all TV methods as MCP tools.
 
 ## TradingView JS API reference (CDP context)
 
@@ -83,13 +87,19 @@ Methods on `chart()`:
 ### Adding indicators
 
 ```javascript
-// Correct — uses _createStudy to bypass metadata lookup
+// Built-in — uses _createStudy to bypass metadata lookup
 var eid = await chart()._createStudy({type: "java", studyId: "RSI@tv-basicstudies"});
 // eid is the entity ID string e.g. "2tMAgd"
+
+// Community script (Pine Script from TradingView's platform)
+var eid = await chart()._createStudy({type: "pine", pineId: "PUB;85"});
+
+// Display name — fallback (triggers metadata request)
+var eid = await chart().createStudy("Relative Strength Index");
 ```
 
 Study ID format: `Name@tv-basicstudies` for built-ins (RSI, MACD, etc.),
-raw ID string for custom indicators (e.g. `SFFMev`).
+`PUB;id` for community scripts, raw ID string for custom indicators (e.g. `SFFMev`).
 
 ### Reading indicator values
 

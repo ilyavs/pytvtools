@@ -8,7 +8,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from pytvtools import TV, TooManyIndicatorsError, wait_for_cdp
+from pytvtools import TV, wait_for_cdp
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger(__name__)
@@ -23,18 +23,6 @@ if barstate.islast
 """
 
 
-async def _ensure_slot(tv: TV) -> None:
-    """Remove indicators if the chart is at capacity."""
-    try:
-        await tv.add_indicator("RSI@tv-basicstudies")
-        await tv.remove_indicator(
-            await tv.add_indicator("RSI@tv-basicstudies")
-        )
-    except TooManyIndicatorsError:
-        log.info("Chart at capacity — clearing indicators...")
-        await tv.remove_all_indicators()
-
-
 async def main():
     if not await wait_for_cdp(timeout=5):
         log.error("CDP not reachable.")
@@ -44,32 +32,25 @@ async def main():
         state = await tv.get_state()
         log.info(f"Chart: {state}")
 
-        # Make sure there's room for the compiled indicator
-        await _ensure_slot(tv)
-        await asyncio.sleep(0.5)
+        # Clear existing indicators if at capacity
+        if await tv.get_indicator_count() >= 2:
+            log.info("Chart at capacity — clearing indicators...")
+            await tv.remove_all_indicators()
+            await asyncio.sleep(0.5)
 
-        # Open Pine Editor via button click or keyboard shortcut
+        # Open Pine Editor via button click
         log.info("Opening Pine Editor...")
-        opened = await tv._eval("""
-        (function() {
-            var selectors = [
-                'button[data-name="pine-editor"]',
-                'button[aria-label="Pine Editor"]',
-            ];
-            for (var i = 0; i < selectors.length; i++) {
-                var btn = document.querySelector(selectors[i]);
-                if (btn) { btn.click(); return true; }
-            }
-            var all = document.querySelectorAll('button');
-            for (var i = 0; i < all.length; i++) {
-                var t = all[i].textContent.trim();
-                if (t === 'Pine Editor' || t === 'Pine' || t.indexOf('Pine') >= 0) {
-                    all[i].click(); return true;
-                }
-            }
-            return false;
-        })()
-        """)
+        try:
+            await tv._eval("""
+            (function() {
+                var btn = document.querySelector('[data-name="open-pine-editor"]');
+                if (btn) { btn.click(); return; }
+                throw new Error('Pine Editor button not found');
+            })()
+            """)
+            opened = True
+        except Exception:
+            opened = False
         if not opened:
             log.warning("Pine Editor button not found — skipping Pine operations")
             log.info("Done (skipped).")

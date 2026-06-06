@@ -6,7 +6,6 @@ via the Runtime.evaluate domain over a WebSocket.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from typing import Any
@@ -63,9 +62,6 @@ class CdpConnection:
         if return_by_value:
             return val.get("value")
         return val.get("objectId")
-
-    async def evaluate_async(self, expression: str) -> Any:
-        return await self.evaluate(expression, await_promise=True)
 
     async def close(self) -> None:
         if self._ws:
@@ -147,8 +143,10 @@ def make_ws_url(target: dict[str, Any]) -> str:
     ws = target.get("webSocketDebuggerUrl")
     if ws:
         return ws
-    # Construct from devtoolsFrontendUrl if needed
-    host = target.get("devtoolsFrontendUrl", "").split("/")[0]
-    if not host:
-        host = f"{CDP_HOST}:{CDP_PORT}"
-    return f"ws://{host}{target.get('devtoolsFrontendUrl', '/devtools/page/' + target['id'])}"
+    # Fallback: try to extract from devtoolsFrontendUrl ?ws= param
+    frontend = target.get("devtoolsFrontendUrl") or ""
+    if "?ws=" in frontend:
+        ws_param = frontend.split("?ws=", 1)[1].split("&", 1)[0]
+        return f"ws://{ws_param}"
+    # Last resort: construct from host + page ID
+    return f"ws://{CDP_HOST}:{CDP_PORT}/devtools/page/{target['id']}"

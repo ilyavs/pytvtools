@@ -14,48 +14,63 @@ from pytvtools.chrome import Chrome, _find_chrome
 class TestFindChrome:
     """_find_chrome resolves Chrome binary per platform."""
 
+    def _env_none(self, key, default=None):
+        return default
+
+    @patch("pytvtools.chrome.os.environ.get", return_value=None)
     @patch("pytvtools.chrome.platform.system", return_value="Windows")
     @patch("pytvtools.chrome.shutil.which", return_value=None)
     @patch("pytvtools.chrome.os.path.isfile", return_value=True)
     @patch("pytvtools.chrome.os.path.expandvars", side_effect=lambda x: x)
-    def test_windows_finds_chrome(self, mock_expandvars, mock_isfile, mock_which, mock_system):
+    def test_windows_finds_chrome(self, mock_expandvars, mock_isfile, mock_which, mock_system, mock_env):
         path = _find_chrome()
         assert path is not None
         assert "chrome.exe" in path
 
+    @patch("pytvtools.chrome.os.environ.get", return_value=None)
     @patch("pytvtools.chrome.platform.system", return_value="Windows")
     @patch("pytvtools.chrome.shutil.which", return_value=None)
     @patch("pytvtools.chrome.os.path.isfile", return_value=False)
     @patch("pytvtools.chrome.os.path.expandvars", side_effect=lambda x: x)
-    def test_windows_not_found(self, mock_expandvars, mock_isfile, mock_which, mock_system):
+    def test_windows_not_found(self, mock_expandvars, mock_isfile, mock_which, mock_system, mock_env):
         path = _find_chrome()
         assert path is None
 
+    @patch("pytvtools.chrome.os.environ.get", return_value=None)
     @patch("pytvtools.chrome.platform.system", return_value="Darwin")
     @patch("pytvtools.chrome.shutil.which", return_value=None)
     @patch("pytvtools.chrome.os.path.isfile", return_value=True)
-    def test_macos_finds_chrome(self, mock_isfile, mock_which, mock_system):
+    def test_macos_finds_chrome(self, mock_isfile, mock_which, mock_system, mock_env):
         path = _find_chrome()
         assert path is not None
         assert "Google Chrome" in path
 
+    @patch("pytvtools.chrome.os.environ.get", return_value=None)
     @patch("pytvtools.chrome.platform.system", return_value="Linux")
     @patch("pytvtools.chrome.shutil.which", side_effect=lambda x: x if x == "google-chrome" else None)
-    def test_linux_finds_chrome(self, mock_which, mock_system):
+    def test_linux_finds_chrome(self, mock_which, mock_system, mock_env):
         path = _find_chrome()
         assert path == "google-chrome"
 
+    @patch("pytvtools.chrome.os.environ.get", return_value=None)
     @patch("pytvtools.chrome.platform.system", return_value="Linux")
     @patch("pytvtools.chrome.shutil.which", return_value=None)
-    def test_linux_not_found(self, mock_which, mock_system):
+    def test_linux_not_found(self, mock_which, mock_system, mock_env):
         path = _find_chrome()
         assert path is None
 
+    @patch("pytvtools.chrome.os.environ.get", return_value=None)
     @patch("pytvtools.chrome.platform.system", return_value="Linux")
     @patch("pytvtools.chrome.shutil.which", side_effect=lambda x: "chromium-browser" if x == "chromium-browser" else None)
-    def test_linux_finds_chromium(self, mock_which, mock_system):
+    def test_linux_finds_chromium(self, mock_which, mock_system, mock_env):
         path = _find_chrome()
         assert path == "chromium-browser"
+
+    @patch("pytvtools.chrome.os.environ.get", return_value="/custom/chrome")
+    @patch("pytvtools.chrome.os.path.isfile", return_value=True)
+    def test_env_override(self, mock_isfile, mock_env):
+        path = _find_chrome()
+        assert path == "/custom/chrome"
 
 
 class TestChrome:
