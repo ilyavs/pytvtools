@@ -8,7 +8,8 @@ cleanup() {
 trap cleanup EXIT
 
 # Editable install so source from the bind mount is reflected without rebuild
-pip install --no-cache-dir -e /app > /dev/null 2>&1
+# Includes dev extras so pytest and other test tools are always available.
+pip install --no-cache-dir -e '/app[dev]' > /dev/null 2>&1
 
 # Remove stale Chrome lock files from unclean shutdown
 rm -f "$TV_USER_DATA_DIR/SingletonLock" "$TV_USER_DATA_DIR/SingletonCookie" "$TV_USER_DATA_DIR/SingletonSocket"
