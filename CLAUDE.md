@@ -2,6 +2,9 @@
 
 Pure Python CDP library for TradingView in Chrome. No Node.js, no submodules.
 
+> **Start here:** [`DEVELOPMENT.md`](DEVELOPMENT.md) — container setup, command patterns,
+> architecture, and implementation rules every agent must follow before editing code.
+
 ## Key modules
 
 | File | What |
