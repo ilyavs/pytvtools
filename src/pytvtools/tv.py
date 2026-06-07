@@ -92,6 +92,96 @@ class TV:
         """Return the number of studies currently on the chart."""
         return len(await self._get_study_ids())
 
+    async def list_templates(self, tab: str | None = None) -> list[dict[str, str]]:
+        """List saved indicator templates.
+
+        Parameters
+        ----------
+        tab : str or None
+            Optional tab name to switch to before listing.
+            One of ``"my templates"``, ``"technicals"``, ``"financials"``.
+            Defaults to whichever tab is active when the dialog opens.
+        """
+        import asyncio
+
+        await self._eval("document.body.click()")
+        await asyncio.sleep(0.3)
+
+        await self._eval("""
+        (function() {
+            var btns = document.querySelectorAll(
+                'button[aria-label="Indicator templates"]'
+            );
+            for (var i = 0; i < btns.length; i++) {
+                var r = btns[i].getBoundingClientRect();
+                if (r.x > 380) { btns[i].click(); return; }
+            }
+            throw new Error('Indicator templates button not found');
+        })()
+        """)
+        await asyncio.sleep(0.5)
+
+        await self._eval("""
+        (function() {
+            var items = document.querySelectorAll('[role="row"]');
+            for (var i = 0; i < items.length; i++) {
+                if (items[i].getAttribute('aria-label') === 'Open template\u2026') {
+                    items[i].click();
+                    return;
+                }
+            }
+            throw new Error('Open template\u2026 not found');
+        })()
+        """)
+        await asyncio.sleep(1)
+
+        if tab:
+            await self._eval(f"""
+            (function() {{
+                var tabs = document.querySelectorAll(
+                    '[data-name="indicator-templates-dialog"] [role="tab"]'
+                );
+                for (var i = 0; i < tabs.length; i++) {{
+                    var qa = tabs[i].getAttribute('data-qa-id') || '';
+                    if (qa.toLowerCase() === {_js_str(tab.lower())}) {{
+                        tabs[i].click();
+                        return;
+                    }}
+                }}
+            }})()
+            """)
+            await asyncio.sleep(0.5)
+
+        templates = await self._eval("""
+        (function() {
+            var items = document.querySelectorAll(
+                '[data-name="indicator-templates-dialog"] [data-role="list-item"]'
+            );
+            var out = [];
+            items.forEach(function(item) {
+                var title = item.getAttribute('data-title');
+                if (!title) return;
+                var desc = item.querySelector('.description-J4S_Zh_W');
+                out.push({
+                    name: title,
+                    description: desc ? desc.textContent.trim() : '',
+                });
+            });
+            return out;
+        })()
+        """)
+
+        await self._eval("""
+        (function() {
+            var btn = document.querySelector('[data-qa-id="close"]');
+            if (btn) { btn.click(); return; }
+            var esc = new KeyboardEvent('keydown', {key: 'Escape', code: 'Escape', keyCode: 27});
+            document.dispatchEvent(esc);
+        })()
+        """)
+
+        return templates or []
+
     async def _get_study_ids(self) -> list[str]:
         ids = await self._eval(f"""
         (function() {{
@@ -469,6 +559,111 @@ class TV:
         """Remove all studies from the chart."""
         await self._eval(f"({_CHART_API}.removeAllStudies())")
         self._indicator_ids.clear()
+
+    async def apply_template(self, name: str) -> None:
+        """Apply a saved indicator template by name.
+
+        Opens the indicator templates menu, locates the template
+        (recently used or full dialog), and activates it.
+        """
+        import asyncio
+
+        # Close any open menus/dialogs
+        await self._eval("document.body.click()")
+        await asyncio.sleep(0.3)
+
+        # Open the indicator templates menu
+        await self._eval("""
+        (function() {
+            var btns = document.querySelectorAll(
+                'button[aria-label="Indicator templates"]'
+            );
+            for (var i = 0; i < btns.length; i++) {
+                var r = btns[i].getBoundingClientRect();
+                if (r.x > 380) { btns[i].click(); return; }
+            }
+            throw new Error('Indicator templates button not found');
+        })()
+        """)
+        await asyncio.sleep(0.5)
+
+        # Strategy 1: click the template directly from dropdown (recently used)
+        found = await self._eval(f"""
+        (function() {{
+            var items = document.querySelectorAll('[role="row"]');
+            for (var i = 0; i < items.length; i++) {{
+                if (items[i].getAttribute('aria-label') === {_js_str(name)}) {{
+                    items[i].click();
+                    return true;
+                }}
+            }}
+            return false;
+        }})()
+        """)
+
+        if found:
+            await asyncio.sleep(1)
+            return
+
+        # Strategy 2: open the full templates dialog
+        await self._eval("""
+        (function() {
+            var items = document.querySelectorAll('[role="row"]');
+            for (var i = 0; i < items.length; i++) {
+                if (items[i].getAttribute('aria-label') === 'Open template\u2026') {
+                    items[i].click();
+                    return;
+                }
+            }
+            throw new Error('Open template\u2026 not found');
+        })()
+        """)
+        await asyncio.sleep(1)
+
+        # Try the active tab first, then fall back to other tabs
+        tabs_to_try = [None]  # None = current tab
+        for tab_id in ("my templates", "technicals", "financials"):
+            tabs_to_try.append(tab_id)
+
+        found = False
+        for tab_id in tabs_to_try:
+            if tab_id is not None:
+                await self._eval(f"""
+                (function() {{
+                    var tabs = document.querySelectorAll(
+                        '[data-name="indicator-templates-dialog"] [role="tab"]'
+                    );
+                    for (var i = 0; i < tabs.length; i++) {{
+                        var qa = tabs[i].getAttribute('data-qa-id') || '';
+                        if (qa.toLowerCase() === {_js_str(tab_id)}) {{
+                            tabs[i].click();
+                            return;
+                        }}
+                    }}
+                }})()
+                """)
+                await asyncio.sleep(0.5)
+
+            clicked = await self._eval(f"""
+            (function() {{
+                var item = document.querySelector(
+                    '[data-role="list-item"][data-title={_js_str(name)}]'
+                );
+                if (!item) return false;
+                item.click();
+                return true;
+            }})()
+            """)
+            if clicked:
+                found = True
+                break
+
+        if not found:
+            raise RuntimeError(
+                f"Template {_js_str(name)} not found in any tab"
+            )
+
+        await asyncio.sleep(1)
 
     async def set_indicator_inputs(
         self, entity_id: str, inputs: dict[str, Any]

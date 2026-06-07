@@ -50,6 +50,8 @@ await chrome.stop()
 - `remove_all_indicators()`
 - `set_indicator_inputs(entity_id, inputs)`
 - `get_indicator_count()` → `int`
+- `list_templates(tab=None)` → `[{name, description}]` — tab: "my templates", "technicals", "financials"
+- `apply_template(name)` — apply a saved indicator template (searches all tabs)
 - `capture_screenshot()` → base64 PNG
 - `get_pine_lines(study_filter=None)` → price levels
 - `get_pine_labels(study_filter=None, max_labels=50)` → text labels

@@ -207,6 +207,27 @@ async def list_tools() -> list[Tool]:
                 "required": ["entity_id", "inputs"],
             },
         ),
+        Tool(
+            name="list_templates",
+            description="List saved indicator templates (optional tab: my templates, technicals, financials).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tab": {"type": "string", "description": "Tab name: my templates, technicals, financials"},
+                },
+            },
+        ),
+        Tool(
+            name="apply_template",
+            description="Apply a saved indicator template by name.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Template name"},
+                },
+                "required": ["name"],
+            },
+        ),
     ]
 
 
@@ -279,6 +300,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 await tv.set_indicator_inputs(
                     entity_id=arguments["entity_id"],
                     inputs=arguments["inputs"],
+                )
+                result = {"ok": True}
+            elif name == "list_templates":
+                result = await tv.list_templates(tab=arguments.get("tab"))
+            elif name == "apply_template":
+                await tv.apply_template(
+                    name=arguments["name"],
                 )
                 result = {"ok": True}
             else:

@@ -75,6 +75,8 @@ This prints the command — copy-paste it to launch Chrome.
 | `remove_all_indicators()` | — | Remove all studies |
 | `set_indicator_inputs(entity_id, inputs)` | — | Change input values on an existing indicator |
 | `get_indicator_count()` | `int` | Number of indicators currently on the chart |
+| `list_templates(tab=None)` | `list[{name, description}]` | List saved templates (tab: ``"my templates"``, ``"technicals"``, ``"financials"``) |
+| `apply_template(name)` | — | Apply a saved indicator template (searches all tabs) |
 
 ### Pine Script drawings
 
@@ -106,6 +108,7 @@ examples/
   multi_symbol_scan.py          — iterate symbols, read indicators
   pine_interaction.py           — inject Pine Script, compile, read errors
   search_and_add_indicator.py   — search built-in & community, add by study_id
+  indicator_templates.py        — list templates from any tab, apply by name
 ```
 
 ```bash
