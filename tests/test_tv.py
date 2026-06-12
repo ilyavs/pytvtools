@@ -272,6 +272,17 @@ class TestIndicators:
         assert "RSI@tv-basicstudies" in expr
         assert "java" in expr
 
+    async def test_add_indicator_std_id(self, mock_cdp):
+        """STD; prefix uses pine-type _createStudy."""
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [[], "sma123"]
+        eid = await tv.add_indicator("STD;SMA")
+        assert eid == "sma123"
+        expr = cdp.evaluate.call_args_list[1][0][0]
+        assert "_createStudy" in expr
+        assert "STD;SMA" in expr
+        assert "pine" in expr
+
     async def test_add_indicator_custom_id(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [[], "custom123"]

@@ -60,10 +60,11 @@ Host edits → src/pytvtools/*.py → mounted to /app → runs in container
    tab. No direct TradingView REST API calls, no HTTP endpoints.
 2. **Use the public chart API** — `window.TradingViewApi.chart()` — to avoid the
    "temporary glitch" overlay that appears when using the internal widget getter.
-3. **Study ID formats:**
-   - Built-in: `Name@tv-basicstudies` (e.g. `RSI@tv-basicstudies`)
-   - Community: `PUB;id` (e.g. `PUB;85`)
-   - These are passed to `_createStudy({type: "java"|"pine", ...})`
+ 3. **Study ID formats:**
+    - Built-in (pine): `STD;Name` (e.g. `STD;RSI`, `STD;SMA`) — use `type: "pine"`
+    - Built-in (java): `Name@tv-basicstudies` (e.g. `Volume@tv-basicstudies`) — use `type: "java"`
+    - Community: `PUB;id` (e.g. `PUB;85`) — use `type: "pine"`
+    - `search_indicators` returns the correct `study_id` for use with `add_indicator`
 4. **JS patterns:**
    - `self._eval(js_string)` — runs JS, returns result
    - `self._eval(js_string, await_promise=True)` — for async/Promise-returning JS

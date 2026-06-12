@@ -36,7 +36,7 @@ async def main():
         await _ensure_slot(tv)
 
         # ------------------------------------------------------------------
-        # 1. Built-in indicator: search → add by @tv-basicstudies
+        # 1. Built-in indicator: search → add by study_id from results
         # ------------------------------------------------------------------
         log.info("\n=== Built-in: search 'RSI' ===")
         results = await tv.search_indicators("RSI")
@@ -44,8 +44,8 @@ async def main():
             pub = r.get("publisher", "")
             log.info(f"  {r['name']:40s} {r['study_id']:25s} {pub}")
 
-        log.info("  Adding RSI@tv-basicstudies...")
-        eid = await tv.add_indicator("RSI@tv-basicstudies")
+        log.info(f"  Adding {results[0]['study_id']}...")
+        eid = await tv.add_indicator(results[0]["study_id"])
         log.info(f"  -> entity ID: {eid}")
         await asyncio.sleep(1.5)
 

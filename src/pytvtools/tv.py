@@ -438,9 +438,9 @@ class TV:
         Returns a list of dicts, each with keys:
           - ``id``       — data-id attribute (e.g. ``STD;RSI``)
           - ``name``     — display name (e.g. ``Relative Strength Index``)
-          - ``study_id`` — usable with :meth:`add_indicator`
-                           (e.g. ``RSI@tv-basicstudies`` for built-ins,
-                           or raw ``PUB;85`` for community scripts).
+           - ``study_id`` — usable with :meth:`add_indicator`
+                            (e.g. ``STD;RSI`` for built-ins,
+                            or raw ``PUB;85`` for community scripts).
         """
         import asyncio
 
