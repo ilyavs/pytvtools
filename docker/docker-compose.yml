@@ -10,6 +10,7 @@ services:
       - chrome-data:/data/chrome-profile
     environment:
       - TV_CDP_PORT=9222
+      - TV_CDP_INTERNAL_PORT=9223
       - TV_URL=https://www.tradingview.com/chart/
     # Override CMD to run a script:
     # command: python examples/basic.py

@@ -14,7 +14,7 @@ import logging
 import os
 from typing import Any
 
-from pytvtools.cdp import CdpConnection, CdpError, find_tv_target, make_ws_url
+from pytvtools.cdp import CdpConnection, CdpError, find_tv_target, get_targets, make_ws_url
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,7 @@ class TV:
         self._cdp = CdpConnection(ws_url)
         await self._cdp.connect()
         self._indicator_ids = set(await self._get_study_ids())
+        await self._close_dialogs()
 
     async def get_indicator_count(self) -> int:
         """Return the number of studies currently on the chart."""
@@ -104,8 +105,7 @@ class TV:
         """
         import asyncio
 
-        await self._eval("document.body.click()")
-        await asyncio.sleep(0.3)
+        await self._close_dialogs()
 
         await self._eval("""
         (function() {
@@ -171,14 +171,7 @@ class TV:
         })()
         """)
 
-        await self._eval("""
-        (function() {
-            var btn = document.querySelector('[data-qa-id="close"]');
-            if (btn) { btn.click(); return; }
-            var esc = new KeyboardEvent('keydown', {key: 'Escape', code: 'Escape', keyCode: 27});
-            document.dispatchEvent(esc);
-        })()
-        """)
+        await self._close_dialogs()
 
         return templates or []
 
@@ -213,7 +206,7 @@ class TV:
         """
         return await self._eval(js)
 
-    async def set_symbol(self, symbol: str) -> None:
+    async def set_symbol(self, symbol: str, timeout: float = 10, wait_data: bool = True) -> None:
         import asyncio
         prev = await self._eval(f"({_CHART_API}.symbol())")
         await self._eval(f"({_CHART_API}.setSymbol({_js_str(symbol)}))")
@@ -226,28 +219,101 @@ class TV:
             raise SymbolNotFoundError(
                 f"Symbol '{symbol}' not found — chart did not change"
             )
-        for _ in range(10):
-            await asyncio.sleep(0.3)
-            has_bars = await self._eval(f"""
-            (function() {{
-                try {{
-                    var items = {_CHART_API}.chartWidget().model()
-                        .mainSeries().bars()._items;
-                    return items && items.length > 0;
-                }} catch(e) {{ return false; }}
-            }})()
-            """)
-            if has_bars:
-                return
-        raise SymbolNotFoundError(
-            f"Symbol '{symbol}' resolved but no data loaded"
-        )
+        if wait_data:
+            data_timeout = max(timeout - 4.5, 1)
+            ready = await self.wait_for_chart_ready(timeout=data_timeout)
+            if not ready:
+                raise SymbolNotFoundError(
+                    f"Symbol '{symbol}' loaded but data did not arrive"
+                )
 
     async def set_timeframe(self, timeframe: str) -> None:
         await self._eval(f"({_CHART_API}.setResolution({_js_str(timeframe)}))")
 
     async def set_chart_type(self, chart_type: int | str) -> None:
         await self._eval(_chart_call("setChartType", chart_type))
+
+    async def wait_for_chart_ready(
+        self, expected_symbol: str | None = None, timeout: float = 10
+    ) -> bool:
+        """Poll DOM + chart API until the chart finishes loading.
+
+        Checks for loading spinners, symbol-header match, and bar-count
+        stability (via DOM *and* chart-model data).  ``expected_symbol``
+        is matched case-insensitively after stripping any ``EXCHANGE:``
+        prefix.  Returns ``True`` when ready, ``False`` on timeout.
+        """
+        import asyncio
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        last_dom_bc = -1
+        last_model_bc = -1
+        stable = 0
+
+        expected_ticker = (
+            expected_symbol.split(":")[-1].upper() if expected_symbol and ":" in expected_symbol
+            else (expected_symbol.upper() if expected_symbol else None)
+        )
+
+        while loop.time() - start < timeout:
+            state = await self._eval(f"""
+            (function() {{
+                var spinner = document.querySelector('[class*="loader"]')
+                    || document.querySelector('[data-name="loading"]');
+                var isLoading = !!(spinner && spinner.offsetParent !== null);
+
+                var domBarCount = -1;
+                try {{ var b = document.querySelectorAll('[class*="bar"]'); domBarCount = b.length; }} catch(e) {{}}
+
+                var el = document.querySelector('[data-name="legend-source-title"]')
+                    || document.querySelector('[class*="title"] [class*="apply-common-tooltip"]');
+                var sym = el ? el.textContent.trim() : '';
+
+                var modelBars = -1;
+                var validBars = -1;
+                try {{
+                    var items = {_CHART_API}.chartWidget().model()
+                        .mainSeries().bars()._items;
+                    modelBars = (items && items.length) || 0;
+                    var count = 0;
+                    for (var j = 0; j < (items || []).length; j++) {{
+                        if (items[j] && items[j].value && items[j].value.length >= 6) count++;
+                    }}
+                    validBars = count;
+                }} catch(e) {{}}
+
+                return {{isLoading: isLoading, domBarCount: domBarCount, modelBars: modelBars, validBars: validBars, currentSymbol: sym}};
+            }})()
+            """)
+            if state is None:
+                await asyncio.sleep(0.2)
+                continue
+            if state.get("isLoading"):
+                stable = 0
+                await asyncio.sleep(0.2)
+                continue
+            if expected_ticker:
+                cur = (state.get("currentSymbol") or "").upper()
+                if expected_ticker not in cur:
+                    stable = 0
+                    await asyncio.sleep(0.2)
+                    continue
+
+            dom_bc = state.get("domBarCount", -1)
+            model_bc = state.get("modelBars", -1)
+            valid_bc = state.get("validBars", 0)
+            bc_match = dom_bc == last_dom_bc and dom_bc > 0
+            model_match = model_bc == last_model_bc and model_bc > 0
+            if (bc_match or model_match) and valid_bc > 0:
+                stable += 1
+            else:
+                stable = 0
+            last_dom_bc = dom_bc
+            last_model_bc = model_bc
+            if stable >= 2:
+                return True
+            await asyncio.sleep(0.2)
+        return False
 
     async def scroll_to_date(self, date: str) -> None:
         await self._eval(f"""
@@ -299,11 +365,15 @@ class TV:
         (function() {{
             var items = {_CHART_API}.chartWidget().model().mainSeries().bars()._items;
             var all = items.slice(-{count});
-            var bars = all.map(function(it) {{
-                var v = it.value;
-                return {{timestamp: v[0], open: v[1], high: v[2], low: v[3], close: v[4], volume: v[5]}};
-            }});
+            var bars = [];
+            for (var i = 0; i < all.length; i++) {{
+                var v = all[i].value;
+                if (v && v.length >= 6) {{
+                    bars.push({{timestamp: v[0], open: v[1], high: v[2], low: v[3], close: v[4], volume: v[5]}});
+                }}
+            }}
             if ({str(summary).lower()}) {{
+                if (bars.length === 0) return null;
                 var highs = bars.map(function(b) {{ return b.high; }});
                 var lows = bars.map(function(b) {{ return b.low; }});
                 var closes = bars.map(function(b) {{ return b.close; }});
@@ -380,6 +450,8 @@ class TV:
         import asyncio
 
         q = query.lower()
+
+        await self._close_dialogs()
 
         # Ensure search dialog is open
         await self._eval("""
@@ -474,15 +546,7 @@ class TV:
             else:
                 r["study_id"] = raw_id
 
-        # Close the search dialog
-        await self._eval("""
-        (function() {
-            var btn = document.querySelector('[data-name="close-indicators-dialog"], .dialog-close');
-            if (btn) { btn.click(); return; }
-            var esc = new KeyboardEvent('keydown', {key: 'Escape', code: 'Escape', keyCode: 27});
-            document.dispatchEvent(esc);
-        })()
-        """)
+        await self._close_dialogs()
 
         return results
 
@@ -557,7 +621,7 @@ class TV:
 
     async def remove_all_indicators(self) -> None:
         """Remove all studies from the chart."""
-        await self._eval(f"({_CHART_API}.removeAllStudies())")
+        await self._eval(f"({_CHART_API}.removeAllStudies())", await_promise=True)
         self._indicator_ids.clear()
 
     async def apply_template(self, name: str) -> None:
@@ -568,9 +632,7 @@ class TV:
         """
         import asyncio
 
-        # Close any open menus/dialogs
-        await self._eval("document.body.click()")
-        await asyncio.sleep(0.3)
+        await self._close_dialogs()
 
         # Open the indicator templates menu
         await self._eval("""
@@ -603,6 +665,7 @@ class TV:
 
         if found:
             await asyncio.sleep(1)
+            await self._close_dialogs()
             return
 
         # Strategy 2: open the full templates dialog
@@ -664,6 +727,7 @@ class TV:
             )
 
         await asyncio.sleep(1)
+        await self._close_dialogs()
 
     async def set_indicator_inputs(
         self, entity_id: str, inputs: dict[str, Any]
@@ -830,6 +894,85 @@ class TV:
         )
         return result.get("data", "")
 
+    async def get_indicator_data(self, entity_id: str) -> dict[str, Any] | None:
+        """Get ALL historical plot data for an indicator by entity ID.
+
+        Returns all plot values across all bars — unlike ``get_study_values``
+        which only returns the last value per study.
+
+        Parameters
+        ----------
+        entity_id : str
+            The entity ID returned by :meth:`add_indicator`.
+
+        Returns
+        -------
+        dict or None
+            ``None`` if the data source is not found, otherwise::
+
+                {
+                    "id": "abc123",
+                    "title": "BB (20, close, 2)",
+                    "count": 400,
+                    "plots": [
+                        {
+                            "name": "Basis",
+                            "values": [
+                                {"timestamp": 1700000000, "value": 150.5},
+                                ...
+                            ]
+                        },
+                        ...
+                    ]
+                }
+        """
+        return await self._eval(f"""
+        (function() {{
+            var model = {_CHART_API}.chartWidget().model();
+            var ds = model.dataSourceForId({_js_str(entity_id)});
+            if (!ds) return null;
+
+            var mv = ds._metaInfo && ds._metaInfo._value;
+            var plotNames = [];
+            if (mv && mv.plots) {{
+                for (var pk in mv.plots) {{
+                    var sid = mv.plots[pk].id;
+                    var title = (mv.styles && mv.styles[sid] && mv.styles[sid].title) || sid;
+                    plotNames[parseInt(pk)] = title;
+                }}
+            }}
+
+            var items = ds._data && ds._data._items;
+            if (!items || !items.length) {{
+                return {{
+                    id: {_js_str(entity_id)},
+                    title: ds.title ? ds.title() : '',
+                    count: 0,
+                    plots: [],
+                }};
+            }}
+
+            var plotCount = ds._simplePlotsCount || 1;
+            var plots = [];
+            for (var p = 0; p < plotCount; p++) {{
+                var pname = plotNames[p] || ('Plot ' + p);
+                var values = [];
+                for (var i = 0; i < items.length; i++) {{
+                    var v = items[i].value;
+                    values.push({{timestamp: v[0], value: v[p + 1]}});
+                }}
+                plots.push({{name: pname, values: values}});
+            }}
+
+            return {{
+                id: {_js_str(entity_id)},
+                title: ds.title ? ds.title() : '',
+                count: items.length,
+                plots: plots,
+            }};
+        }})()
+        """)
+
     # ------------------------------------------------------------------
     # Batch
     # ------------------------------------------------------------------
@@ -837,29 +980,136 @@ class TV:
     async def batch(
         self, symbols: list[str], timeframes: list[str], action: str = "ohlcv"
     ) -> dict[str, Any]:
-        """Iterate symbols/timeframes and collect data."""
+        """Iterate symbols/timeframes and collect data (CDP-based).
+
+        Trade-off: TradingView's per-user rate limit throttles after
+        ~8 rapid ``setSymbol`` calls.  This method works around it by:
+
+        1. Pacing calls ~2s apart to stay under the burst limit.
+        2. Refreshing the chart session every 6 symbols.
+        3. Retrying failures one-at-a-time with progressive cooldown.
+        4. Using a robust model-ready check after navigation.
+
+        Returns partial results if a symbol still fails after all
+        retries.  Always restores the original chart state.
+        """
         state = await self.get_state()
         original_symbol = state["symbol"]
         original_tf = state["timeframe"]
 
         import asyncio
+        import logging
 
-        results = {}
-        try:
-            for sym in symbols:
-                await self.set_symbol(sym)
-                await asyncio.sleep(0.3)
+        log = logging.getLogger(__name__)
+
+        results: dict[str, Any] = {}
+        failed: list[str] = []
+
+        RESET_EVERY = 10
+        RETRY_WAITS = [5, 15, 30]
+
+        async def _process_batch(syms: list[str]) -> None:
+            nonlocal results, failed
+            symbol_count = 0
+            first = True
+            for sym in syms:
+                symbol_count += 1
+                if symbol_count > RESET_EVERY:
+                    log.info("batch: resetting chart session to avoid rate limit")
+                    await self._reset_chart_session()
+                    await self.set_timeframe(original_tf)
+                    symbol_count = 1
+                    first = True
+
+                # Pacing: 1s between calls keeps us under the burst limit.
+                # After a reset, the first symbol needs 1s settling time too.
+                if not first:
+                    await asyncio.sleep(1)
+                first = False
+
+                try:
+                    t0 = asyncio.get_running_loop().time()
+                    await self.set_symbol(sym, wait_data=False)
+                    elapsed = asyncio.get_running_loop().time() - t0
+                    if elapsed > 3:
+                        log.info("batch: %s loaded in %.1fs", sym, elapsed)
+                except SymbolNotFoundError:
+                    failed.append(sym)
+                    continue
+
                 sym_data = {}
+                all_ok = True
                 for tf in timeframes:
                     await self.set_timeframe(tf)
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(0.5)
                     if action == "ohlcv":
-                        sym_data[tf] = await self.get_ohlcv(summary=True)
+                        val = await self.get_ohlcv(summary=True)
+                        if val is None:
+                            all_ok = False
+                        sym_data[tf] = val
                     elif action == "studies":
                         sym_data[tf] = await self.get_study_values()
-                results[sym] = sym_data
+                if all_ok:
+                    results[sym] = sym_data
+                else:
+                    failed.append(sym)
+
+        try:
+            await _process_batch(symbols)
+
+            for round_num, wait_sec in enumerate(RETRY_WAITS, 1):
+                if not failed:
+                    break
+                syms = list(failed)
+                failed = []
+                log.info(
+                    "batch: retry round %d/%d — waiting %ds for cooldown, retrying %d symbols",
+                    round_num, len(RETRY_WAITS), wait_sec, len(syms),
+                )
+                await asyncio.sleep(wait_sec)
+                # Retry one symbol at a time with its own reset — avoids
+                # cascading rate limits across symbols in the same round.
+                for sym in syms:
+                    await self._reset_chart_session()
+                    await self.set_timeframe(original_tf)
+                    try:
+                        t0 = asyncio.get_running_loop().time()
+                        await self.set_symbol(sym, wait_data=False)
+                        elapsed = asyncio.get_running_loop().time() - t0
+                        if elapsed > 3:
+                            log.info("batch: %s retried in %.1fs", sym, elapsed)
+                    except SymbolNotFoundError:
+                        failed.append(sym)
+                        continue
+                    sym_data = {}
+                    all_ok = True
+                    for tf in timeframes:
+                        await self.set_timeframe(tf)
+                        await asyncio.sleep(0.5)
+                        if action == "ohlcv":
+                            val = await self.get_ohlcv(summary=True)
+                            if val is None:
+                                all_ok = False
+                            sym_data[tf] = val
+                        elif action == "studies":
+                            sym_data[tf] = await self.get_study_values()
+                    if all_ok:
+                        results[sym] = sym_data
+                    else:
+                        failed.append(sym)
+
+            if failed:
+                for sym in failed:
+                    results[sym] = {tf: None for tf in timeframes}
+                    log.warning("batch: %s failed after all retries — skipping", sym)
+
         finally:
-            await self.set_symbol(original_symbol)
+            log.info("batch: restoring original state (%s, %s)", original_symbol, original_tf)
+            await asyncio.sleep(3)
+            try:
+                await self.set_symbol(original_symbol)
+            except SymbolNotFoundError:
+                pass
             await self.set_timeframe(original_tf)
 
         return results
@@ -867,6 +1117,73 @@ class TV:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    async def _reset_chart_session(self) -> None:
+        """Navigate current tab to a fresh chart URL.
+
+        Resets the per-session TradingView rate limit by creating a
+        brand new WebSocket connection.  The CDP connection remains
+        alive across navigation.  Waits until bar data is actually
+        present in the model (not just chart().symbol() being non-null,
+        which fires before the data WebSocket connects).
+        """
+        import asyncio
+        chart_url = "https://www.tradingview.com/chart/"
+        logger.info("_reset_chart_session: navigating to %s", chart_url)
+        await self._eval(f"window.location.href = {_js_str(chart_url)}")
+        nav_start = asyncio.get_running_loop().time()
+        last_model_bc = -1
+        stable = 0
+        for i in range(60):
+            await asyncio.sleep(0.5)
+            try:
+                state = await self._eval(f"""
+                (function() {{
+                    var mbc = -1;
+                    var vbc = -1;
+                    try {{
+                        var items = {_CHART_API}.chartWidget().model()
+                            .mainSeries().bars()._items;
+                        mbc = (items && items.length) || 0;
+                        var c = 0;
+                        for (var j = 0; j < (items || []).length; j++) {{
+                            if (items[j] && items[j].value && items[j].value.length >= 6) c++;
+                        }}
+                        vbc = c;
+                    }} catch(e) {{}}
+                    return {{modelBars: mbc, validBars: vbc}};
+                }})()
+                """)
+                if not state:
+                    continue
+                mbc = state.get("modelBars", -1)
+                vbc = state.get("validBars", 0)
+                if mbc > 0 and vbc > 0 and mbc == last_model_bc:
+                    stable += 1
+                else:
+                    stable = 0
+                last_model_bc = mbc
+                if stable >= 2:
+                    elapsed = asyncio.get_running_loop().time() - nav_start
+                    logger.info("_reset_chart_session: ready with %d bars after %.1fs", vbc, elapsed)
+                    return
+            except Exception as exc:
+                if i < 5 or i % 5 == 0:
+                    logger.debug("_reset_chart_session: attempt %d: %s", i, exc)
+        logger.warning("_reset_chart_session: chart not ready within 30s")
+
+    async def _close_dialogs(self) -> None:
+        """Dismiss any open dialogs/menus via click-away and close buttons."""
+        import asyncio
+        await self._eval("document.body.click()")
+        await asyncio.sleep(0.2)
+        await self._eval("""
+        (function() {
+            var btns = document.querySelectorAll('[data-qa-id="close"], .dialog-close');
+            for (var i = 0; i < btns.length; i++) { btns[i].click(); }
+        })()
+        """)
+        await asyncio.sleep(0.2)
 
     async def _eval(self, expression: str, **kwargs: Any) -> Any:
         if not self._cdp:

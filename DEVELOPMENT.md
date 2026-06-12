@@ -30,8 +30,8 @@ docker exec docker-pytvtools-1 python -m pytest tests/ -m integration -v --captu
 # Run an example
 docker exec docker-pytvtools-1 python examples/basic.py
 
-# Unit test count: 106 (all mock, no Chrome needed)
-# Integration test count: 6 (requires live Chrome + TV tab)
+# Unit test count: 122 (all mock, no Chrome needed)
+# Integration test count: 8 (requires live Chrome + TV tab)
 ```
 
 ## Architecture
@@ -42,12 +42,14 @@ Host edits → src/pytvtools/*.py → mounted to /app → runs in container
 
 | File | Purpose |
 |------|---------|
-| `src/pytvtools/tv.py` | `TV` — all high-level methods |
+| `src/pytvtools/tv.py` | `TV` — all high-level methods (CDP-based) |
+| `src/pytvtools/tvdata.py` | `TVData` — direct WebSocket OHLCV fetcher (no CDP) |
 | `src/pytvtools/cdp.py` | `CdpConnection` — WebSocket transport, `Runtime.evaluate` |
 | `src/pytvtools/chrome.py` | `Chrome` — launch/stop/restart headless Chrome |
 | `src/pytvtools/mcp_server.py` | MCP server wrapping all TV methods |
 | `src/pytvtools/__init__.py` | Public exports |
 | `tests/test_tv.py` | Unit tests for TV methods |
+| `tests/test_tvdata.py` | Unit tests for TVData direct WS fetcher |
 | `tests/test_cdp.py` | Unit tests for CDP transport |
 | `tests/test_chrome.py` | Unit tests for Chrome lifecycle |
 | `examples/` | Runnable examples (also integration test targets) |

@@ -11,13 +11,14 @@ Pure Python CDP library for TradingView in Chrome. No Node.js, no submodules.
 |------|------|
 | `src/pytvtools/cdp.py` | `CdpConnection` — WebSocket transport for CDP `Runtime.evaluate` |
 | `src/pytvtools/chrome.py` | `Chrome` — launch/stop/restart headless Chrome with CDP |
-| `src/pytvtools/tv.py` | `TV` — high-level TradingView client (main interface) |
+| `src/pytvtools/tv.py` | `TV` — high-level TradingView client (CDP-based) |
+| `src/pytvtools/tvdata.py` | `TVData` — direct WebSocket OHLCV fetcher (no CDP, fast) |
 | `src/pytvtools/__init__.py` | Re-exports |
 
 ## Usage
 
 ```python
-from pytvtools import TV, Chrome, wait_for_cdp
+from pytvtools import TV, TVData, Chrome, wait_for_cdp
 
 # Option A: external Chrome
 await wait_for_cdp()
@@ -31,6 +32,11 @@ await chrome.start(headless=True)
 async with TV() as tv:
     rsi = await tv.get_study_values()
 await chrome.stop()
+
+# Option C: direct WebSocket (no Chrome needed, OHLCV only)
+async with TVData() as d:
+    bars = await d.get_ohlcv("NASDAQ:AAPL", "1D", 100)
+    summary = await d.get_ohlcv("BINANCE:BTCUSDT", "1D", 500, summary=True)
 ```
 
 ## All TV methods

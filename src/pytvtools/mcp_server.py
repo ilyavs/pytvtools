@@ -22,7 +22,7 @@ try:
 except ImportError:
     sys.exit("Install: pip install pytvtools[mcp]")
 
-from pytvtools import TV, wait_for_cdp
+from pytvtools import TV, TVData, wait_for_cdp
 
 server = Server("pytvtools")
 
@@ -62,6 +62,20 @@ async def list_tools() -> list[Tool]:
                     "count": {"type": "number", "default": 100},
                     "summary": {"type": "boolean", "default": False},
                 },
+            },
+        ),
+        Tool(
+            name="get_ohlcv_fast",
+            description="FAST OHLCV via direct WebSocket (no Chrome/ CDP needed). Supports any symbol/interval.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "Symbol in EXCHANGE:SYMBOL format, e.g. NASDAQ:AAPL"},
+                    "interval": {"type": "string", "default": "1D", "description": "Timeframe (1, 5, 15, 60, D, W, M)"},
+                    "bars_count": {"type": "number", "default": 100, "description": "Number of bars (max 5000 for free tier)"},
+                    "summary": {"type": "boolean", "default": False},
+                },
+                "required": ["symbol"],
             },
         ),
         Tool(
@@ -208,6 +222,17 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="get_indicator_data",
+            description="Get ALL historical plot data for an indicator by entity ID. Returns every bar for every plot.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "entity_id": {"type": "string", "description": "Entity ID from add_indicator"},
+                },
+                "required": ["entity_id"],
+            },
+        ),
+        Tool(
             name="list_templates",
             description="List saved indicator templates (optional tab: my templates, technicals, financials).",
             inputSchema={
@@ -244,6 +269,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             elif name == "set_timeframe":
                 await tv.set_timeframe(arguments["timeframe"])
                 result = {"ok": True}
+            elif name == "get_ohlcv_fast":
+                async with TVData() as d:
+                    result = await d.get_ohlcv(
+                        symbol=arguments["symbol"],
+                        interval=arguments.get("interval", "1D"),
+                        bars_count=arguments.get("bars_count", 100),
+                        summary=arguments.get("summary", False),
+                    )
             elif name == "get_ohlcv":
                 result = await tv.get_ohlcv(
                     count=arguments.get("count", 100),
@@ -302,6 +335,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     inputs=arguments["inputs"],
                 )
                 result = {"ok": True}
+            elif name == "get_indicator_data":
+                result = await tv.get_indicator_data(
+                    entity_id=arguments["entity_id"],
+                )
             elif name == "list_templates":
                 result = await tv.list_templates(tab=arguments.get("tab"))
             elif name == "apply_template":

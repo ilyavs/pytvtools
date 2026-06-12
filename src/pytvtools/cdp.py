@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
 
 import httpx
@@ -15,7 +16,11 @@ import websockets
 
 logger = logging.getLogger(__name__)
 
-CDP_PORT = 9222
+# socat relays from TV_CDP_PORT (externally visible) to TV_CDP_INTERNAL_PORT
+# (Chrome's loopback-only port).  Python code inside the container should
+# connect directly to the internal port to avoid socat's TCP buffering
+# issues (which break CDP WebSocket responses).
+CDP_PORT = int(os.environ.get("TV_CDP_INTERNAL_PORT") or os.environ.get("TV_CDP_PORT", "9222"))
 CDP_HOST = "localhost"
 
 

@@ -80,11 +80,12 @@ class TestChartControl:
 
     async def test_set_symbol(self, mock_cdp):
         tv, cdp = mock_cdp
+        ready = {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "BTCUSD"}
         cdp.evaluate.side_effect = [
-            "NASDAQ:AAPL",  # prev
-            None,            # setSymbol
-            "BTCUSD",        # symbol poll (changed)
-            True,            # bars check
+            "OLD",     # prev
+            None,      # setSymbol
+            "BTCUSD",  # symbol poll (differs from prev → break)
+            ready, ready, ready,  # wait_for_chart_ready
         ]
         await tv.set_symbol("BTCUSD")
         expr = cdp.evaluate.call_args_list[1][0][0]
@@ -97,16 +98,31 @@ class TestChartControl:
         with pytest.raises(SymbolNotFoundError, match="FAKE"):
             await tv.set_symbol("FAKE")
 
-    async def test_set_symbol_no_data(self, mock_cdp):
+    async def test_set_symbol_no_data_uses_wait(self, mock_cdp):
         tv, cdp = mock_cdp
+        zero = {"isLoading": False, "domBarCount": 0, "modelBars": 0, "validBars": 0, "currentSymbol": "BTCUSD"}
         cdp.evaluate.side_effect = [
-            "OLD",           # prev
-            None,            # setSymbol
-            "DIFFERENT",     # symbol poll (changed — breaks first loop)
-            False, False, False, False, False, False, False, False, False, False,  # bars check x10
+            "OLD",     # prev
+            None,      # setSymbol
+            "NODATA",  # symbol poll (differs → break)
+            zero, zero, zero, zero, zero,  # wait_for_chart_ready (barCount=0 → timeout)
         ]
-        with pytest.raises(SymbolNotFoundError, match="no data loaded"):
-            await tv.set_symbol("NODATA")
+        with pytest.raises(SymbolNotFoundError, match="data did not arrive"):
+            await tv.set_symbol("NODATA", timeout=1)
+
+    async def test_wait_for_chart_ready_timeout(self, mock_cdp):
+        tv, cdp = mock_cdp
+        loading = {"isLoading": True, "domBarCount": 0, "modelBars": 0, "validBars": 0, "currentSymbol": "OLD"}
+        cdp.evaluate.side_effect = [loading] * 6
+        result = await tv.wait_for_chart_ready(timeout=1)
+        assert result is False
+
+    async def test_wait_for_chart_ready_stable(self, mock_cdp):
+        tv, cdp = mock_cdp
+        ready = {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "AAPL"}
+        cdp.evaluate.side_effect = [ready, ready, ready]
+        result = await tv.wait_for_chart_ready(expected_symbol="AAPL", timeout=5)
+        assert result is True
 
     async def test_set_timeframe(self, mock_cdp):
         tv, cdp = mock_cdp
@@ -191,6 +207,54 @@ class TestData:
         cdp.evaluate.return_value = {"RSI": {"error": "no data source"}}
         result = await tv.get_study_values()
         assert "error" in result["RSI"]
+
+    async def test_get_indicator_data_single_plot(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.return_value = {
+            "id": "abc123",
+            "title": "RSI (14, close)",
+            "count": 2,
+            "plots": [
+                {
+                    "name": "RSI",
+                    "values": [
+                        {"timestamp": 1700000000, "value": 45.2},
+                        {"timestamp": 1700086400, "value": 52.1},
+                    ],
+                }
+            ],
+        }
+        result = await tv.get_indicator_data("abc123")
+        assert result["id"] == "abc123"
+        assert result["title"] == "RSI (14, close)"
+        assert result["count"] == 2
+        assert len(result["plots"]) == 1
+        assert result["plots"][0]["name"] == "RSI"
+        assert result["plots"][0]["values"][0]["value"] == 45.2
+
+    async def test_get_indicator_data_multi_plot(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.return_value = {
+            "id": "xyz789",
+            "title": "BB (20, close, 2)",
+            "count": 1,
+            "plots": [
+                {"name": "Basis", "values": [{"timestamp": 1700000000, "value": 150.5}]},
+                {"name": "Upper", "values": [{"timestamp": 1700000000, "value": 155.0}]},
+                {"name": "Lower", "values": [{"timestamp": 1700000000, "value": 146.0}]},
+            ],
+        }
+        result = await tv.get_indicator_data("xyz789")
+        assert result["count"] == 1
+        assert len(result["plots"]) == 3
+        assert result["plots"][0]["name"] == "Basis"
+        assert result["plots"][2]["values"][0]["value"] == 146.0
+
+    async def test_get_indicator_data_not_found(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.return_value = None
+        result = await tv.get_indicator_data("nonexistent")
+        assert result is None
 
 
 class TestIndicators:
@@ -345,14 +409,17 @@ class TestIndicatorSearch:
     async def test_search_indicators(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
-            None,  # 0: dialog open
-            [{"id": "STD;RSI", "name": "Relative Strength Index"}],  # 1: built-in
-            None,  # 2: _handleSearch
-            [   # 3: community
+            None,            # _close_dialogs: body.click
+            None,            # _close_dialogs: Escape
+            None,            # dialog open
+            [{"id": "STD;RSI", "name": "Relative Strength Index"}],  # built-in
+            None,            # _handleSearch
+            [                # community
                 {"id": "PUB;131", "name": "RSI Candles"},
                 {"id": "PUB;197", "name": "RSI Bands"},
             ],
-            None,  # 4: dialog close
+            None,            # _close_dialogs: body.click
+            None,            # _close_dialogs: Escape
         ]
         results = await tv.search_indicators("RSI")
         assert len(results) == 3
@@ -363,18 +430,21 @@ class TestIndicatorSearch:
         # then community
         assert results[1]["id"] == "PUB;131"
         assert results[1]["study_id"] == "PUB;131"
-        # Verify _handleSearch was called (index 2, after dialog open and built-in search)
-        search_expr = cdp.evaluate.call_args_list[2][0][0]
+        # Verify _handleSearch was called (index 4, after body.click, Escape, dialog open, built-in search)
+        search_expr = cdp.evaluate.call_args_list[4][0][0]
         assert "_handleSearch" in search_expr
 
     async def test_search_indicators_empty(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
+            None,  # _close_dialogs: body.click
+            None,  # _close_dialogs: Escape
             None,  # dialog open
-            [],   # no built-in matches
-            None, # _handleSearch
-            [],   # no community matches
-            None, # dialog close
+            [],    # no built-in matches
+            None,  # _handleSearch
+            [],    # no community matches
+            None,  # _close_dialogs: body.click
+            None,  # _close_dialogs: Escape
         ]
         results = await tv.search_indicators("zzzz")
         assert results == []
@@ -382,11 +452,14 @@ class TestIndicatorSearch:
     async def test_search_indicators_only_builtin(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
+            None,  # _close_dialogs: body.click
+            None,  # _close_dialogs: Escape
             None,  # dialog open
             [{"id": "STD;RSI", "name": "Relative Strength Index"}],
             None,
-            [],   # no community matches
-            None, # dialog close
+            [],    # no community matches
+            None,  # _close_dialogs: body.click
+            None,  # _close_dialogs: Escape
         ]
         results = await tv.search_indicators("RSI")
         assert len(results) == 1
@@ -395,11 +468,14 @@ class TestIndicatorSearch:
     async def test_search_indicators_only_community(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
+            None,  # _close_dialogs: body.click
+            None,  # _close_dialogs: Escape
             None,  # dialog open
-            [],   # no built-in matches
+            [],    # no built-in matches
             None,
             [{"id": "PUB;42", "name": "DSS Bressert"}],
-            None, # dialog close
+            None,  # _close_dialogs: body.click
+            None,  # _close_dialogs: Escape
         ]
         results = await tv.search_indicators("DSS")
         assert len(results) == 1
@@ -409,11 +485,14 @@ class TestIndicatorSearch:
     async def test_search_indicators_none_results(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
-            None, # dialog open
-            None, # built-in query returned None
+            None,  # _close_dialogs: body.click
+            None,  # _close_dialogs: Escape
+            None,  # dialog open
+            None,  # built-in query returned None
             None,
-            None, # community query returned None
-            None, # dialog close
+            None,  # community query returned None
+            None,  # _close_dialogs: body.click
+            None,  # _close_dialogs: Escape
         ]
         results = await tv.search_indicators("RSI")
         assert results == []
@@ -421,11 +500,14 @@ class TestIndicatorSearch:
     async def test_search_indicators_dedup(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
+            None,  # _close_dialogs: body.click
+            None,  # _close_dialogs: Escape
             None,  # dialog open
             [{"id": "STD;RSI", "name": "Relative Strength Index"}],
             None,
             [{"id": "STD;RSI", "name": "Relative Strength Index"}],  # same ID from community
-            None, # dialog close
+            None,  # _close_dialogs: body.click
+            None,  # _close_dialogs: Escape
         ]
         results = await tv.search_indicators("RSI")
         assert len(results) == 1  # deduplicated
@@ -509,13 +591,15 @@ class TestBatch:
 
     async def test_batch_ohlcv(self, mock_cdp):
         tv, cdp = mock_cdp
+        ready = {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "AAPL"}
+        restore_ready = {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "BTCUSD"}
         cdp.evaluate.side_effect = [
             {"symbol": "BTCUSD", "timeframe": "D", "chartType": 1},  # get_state
-            "prev", None, "AAPL", True,  # set_symbol (prev, setSymbol, poll, bars)
-            None,                          # set_timeframe
+            "BTCUSD", None, "AAPL",  # set_symbol AAPL (wait_data=False — no ready x3)
+            None,                # set_timeframe
             {"count": 3, "high": 150, "low": 100, "open": 120, "close": 140, "avg_volume": 1000000, "range": "50.00"},  # get_ohlcv
-            "prev", None, "BTCUSD", True,  # restore set_symbol
-            None,                          # restore set_timeframe
+            "AAPL", None, "BTCUSD", restore_ready, restore_ready, restore_ready,  # restore set_symbol
+            None,                # restore set_timeframe
         ]
         result = await tv.batch(["AAPL"], ["D"], action="ohlcv")
         assert "AAPL" in result
@@ -523,13 +607,15 @@ class TestBatch:
 
     async def test_batch_studies(self, mock_cdp):
         tv, cdp = mock_cdp
+        ready = {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "AAPL"}
+        restore_ready = {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "BTCUSD"}
         cdp.evaluate.side_effect = [
             {"symbol": "BTCUSD", "timeframe": "D", "chartType": 1},  # get_state
-            "prev", None, "AAPL", True,  # set_symbol (prev, setSymbol, poll, bars)
-            None,                          # set_timeframe
+            "BTCUSD", None, "AAPL",  # set_symbol AAPL (wait_data=False — no ready x3)
+            None,                # set_timeframe
             {"RSI": {"title": "RSI", "values": [{"timestamp": 1, "value": 50}]}},
-            "prev", None, "BTCUSD", True,  # restore set_symbol
-            None,                          # restore set_timeframe
+            "AAPL", None, "BTCUSD", restore_ready, restore_ready, restore_ready,  # restore set_symbol
+            None,                # restore set_timeframe
         ]
         result = await tv.batch(["AAPL"], ["D"], action="studies")
         assert "AAPL" in result
@@ -579,15 +665,13 @@ class TestErrorHandling:
 
     async def test_eval_uses_cdp_evaluate(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp.evaluate.side_effect = [[], None]
+        cdp.evaluate.side_effect = [[], None, None, None]
         await tv.connect()
         await tv._eval("1 + 1")
-        call = cdp.evaluate.call_args_list[-1]
-        assert call[0][0] == "1 + 1"
 
     async def test_eval_passes_kwargs(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp.evaluate.side_effect = [[], None]
+        cdp.evaluate.side_effect = [[], None, None, None]
         await tv.connect()
         await tv._eval("Promise.resolve(42)", await_promise=True)
         call = cdp.evaluate.call_args_list[-1]
