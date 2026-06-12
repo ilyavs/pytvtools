@@ -1004,7 +1004,7 @@ class TV:
     # ------------------------------------------------------------------
 
     async def batch(
-        self, symbols: list[str], timeframes: list[str], action: str = "ohlcv"
+        self, symbols: list[str], timeframes: list[str], action: str = "ohlcv", max_bars: int = 500
     ) -> dict[str, Any]:
         """Iterate symbols/timeframes and collect data (CDP-based).
 
@@ -1026,6 +1026,9 @@ class TV:
             ``"studies"`` — indicator values only.
             ``"all"`` — both in one pass, returns nested dict per
             timeframe: ``{"ohlcv": ..., "studies": ...}``.
+        max_bars : int
+            Maximum bars to fetch per timeframe (passed to
+            ``get_ohlcv(count=max_bars)``).  Default 500.
 
         Returns results for every symbol (partial data on failure).
         Always restores the original chart state.
@@ -1056,7 +1059,7 @@ class TV:
                 await self.set_timeframe(tf)
                 await asyncio.sleep(0.5)
                 if action == "ohlcv":
-                    val = await self.get_ohlcv(summary=True)
+                    val = await self.get_ohlcv(count=max_bars, summary=True)
                     if val is None:
                         ok = False
                     data[tf] = val
@@ -1066,7 +1069,7 @@ class TV:
                         ok = False
                     data[tf] = val
                 elif action == "all":
-                    ohlcv_val = await self.get_ohlcv(summary=True)
+                    ohlcv_val = await self.get_ohlcv(count=max_bars, summary=True)
                     studies_val = await self.get_study_values()
                     if ohlcv_val is None and not studies_val:
                         ok = False

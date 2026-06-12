@@ -52,6 +52,11 @@ class CollectorConfig:
         TradingView symbol strings (e.g. ``"BINANCE:BTCUSDT"``).
     timeframes : list[str]
         Timeframe strings (``"1D"``, ``"60"``, ``"15"``, etc.)
+    max_bars : int
+        Maximum bars to fetch per symbol/timeframe (default 500).
+        Passed directly to ``get_ohlcv(count=max_bars)``.  The CDP
+        path reads whatever bars the chart has loaded in memory;
+        scrolling the chart back first can load more.
     actions : list[str] | None
         Which actions to run.  ``None`` (default) means both
         ``["ohlcv", "studies"]``.  Pass ``["ohlcv"]`` for a faster
@@ -59,6 +64,7 @@ class CollectorConfig:
     """
     symbols: list[str]
     timeframes: list[str]
+    max_bars: int = 500
     actions: list[str] | None = None
 
     def __post_init__(self) -> None:
@@ -140,7 +146,7 @@ class Collector:
         merged: dict[tuple[str, str], dict[str, Any]] = {}
         per_sym_failures: dict[str, set[str]] = {sym: set() for sym in self.config.symbols}
 
-        raw = await tv.batch(self.config.symbols, self.config.timeframes, self._batch_action)
+        raw = await tv.batch(self.config.symbols, self.config.timeframes, self._batch_action, max_bars=self.config.max_bars)
         for sym, tf_data in raw.items():
             for tf, val in tf_data.items():
                 if val is None:

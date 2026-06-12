@@ -97,6 +97,7 @@ class TestCollectorRun:
             ["NASDAQ:AAPL", "NASDAQ:MSFT"],
             ["1D", "60"],
             "ohlcv",
+            max_bars=500,
         )
 
     async def test_actions_merge(self, mock_tv):
@@ -115,6 +116,7 @@ class TestCollectorRun:
             ["NASDAQ:AAPL", "NASDAQ:MSFT"],
             ["1D", "60"],
             "all",
+            max_bars=500,
         )
 
         msft_1d = next(r for r in result.records if r["symbol"] == "NASDAQ:MSFT" and r["timeframe"] == "1D")
@@ -151,6 +153,15 @@ class TestCollectorRun:
         assert result.symbols_failed == []
         assert len(result.records) == 1
         assert result.records[0]["timeframe"] == "1D"
+
+    async def test_custom_max_bars(self, mock_tv):
+        data = {"A": {"1D": SAMPLE_OHLCV["NASDAQ:AAPL"]["1D"]}}
+        mock_tv.batch = AsyncMock(return_value=data)
+        collector = Collector(CollectorConfig(symbols=["A"], timeframes=["1D"], actions=["ohlcv"], max_bars=1000))
+        await collector.run(mock_tv)
+        mock_tv.batch.assert_awaited_once_with(
+            ["A"], ["1D"], "ohlcv", max_bars=1000,
+        )
 
 
 # ---------------------------------------------------------------------------
