@@ -14,7 +14,7 @@ import logging
 import os
 from typing import Any
 
-from pytvtools.cdp import CdpConnection, CdpError, find_tv_target, get_targets, make_ws_url
+from pytvtools.cdp import CdpConnection, CdpError, find_tv_target, make_ws_url
 
 logger = logging.getLogger(__name__)
 
@@ -982,31 +982,50 @@ class TV:
     ) -> dict[str, Any]:
         """Iterate symbols/timeframes and collect data (CDP-based).
 
-        Trade-off: TradingView's per-user rate limit throttles after
-        ~8 rapid ``setSymbol`` calls.  This method works around it by:
+        TradingView's per-user rate limit throttles after ~8 rapid
+        ``setSymbol`` calls (~30s cooldown), so this method:
 
-        1. Pacing calls ~2s apart to stay under the burst limit.
-        2. Refreshing the chart session every 6 symbols.
-        3. Retrying failures one-at-a-time with progressive cooldown.
-        4. Using a robust model-ready check after navigation.
+        1. Paces ``setSymbol`` calls ~1s apart to stay under the burst
+           limit.
+        2. Refreshes the chart session every 10 symbols.
+        3. Retries failures one-at-a-time with progressive cooldown
+           (5s → 15s → 30s), each on a fresh session.
+        4. Stores partial data per-timeframe even if some timeframes
+           fail — no data is discarded.
 
-        Returns partial results if a symbol still fails after all
-        retries.  Always restores the original chart state.
+        Returns results for every symbol (partial data on failure).
+        Always restores the original chart state.
         """
+        import asyncio
         state = await self.get_state()
         original_symbol = state["symbol"]
         original_tf = state["timeframe"]
-
-        import asyncio
-        import logging
-
-        log = logging.getLogger(__name__)
 
         results: dict[str, Any] = {}
         failed: list[str] = []
 
         RESET_EVERY = 10
         RETRY_WAITS = [5, 15, 30]
+
+        async def _fetch(sym: str) -> tuple[dict[str, Any], bool]:
+            """Set symbol, fetch data per timeframe, return (data, all_ok)."""
+            try:
+                await self.set_symbol(sym, wait_data=False)
+            except SymbolNotFoundError:
+                return {}, False
+            data: dict[str, Any] = {}
+            ok = True
+            for tf in timeframes:
+                await self.set_timeframe(tf)
+                await asyncio.sleep(0.5)
+                if action == "ohlcv":
+                    val = await self.get_ohlcv(summary=True)
+                    if val is None:
+                        ok = False
+                    data[tf] = val
+                elif action == "studies":
+                    data[tf] = await self.get_study_values()
+            return data, ok
 
         async def _process_batch(syms: list[str]) -> None:
             nonlocal results, failed
@@ -1015,43 +1034,20 @@ class TV:
             for sym in syms:
                 symbol_count += 1
                 if symbol_count > RESET_EVERY:
-                    log.info("batch: resetting chart session to avoid rate limit")
+                    logger.info("batch: resetting chart session to avoid rate limit")
                     await self._reset_chart_session()
                     await self.set_timeframe(original_tf)
                     symbol_count = 1
                     first = True
 
-                # Pacing: 1s between calls keeps us under the burst limit.
-                # After a reset, the first symbol needs 1s settling time too.
                 if not first:
                     await asyncio.sleep(1)
                 first = False
 
-                try:
-                    t0 = asyncio.get_running_loop().time()
-                    await self.set_symbol(sym, wait_data=False)
-                    elapsed = asyncio.get_running_loop().time() - t0
-                    if elapsed > 3:
-                        log.info("batch: %s loaded in %.1fs", sym, elapsed)
-                except SymbolNotFoundError:
-                    failed.append(sym)
-                    continue
-
-                sym_data = {}
-                all_ok = True
-                for tf in timeframes:
-                    await self.set_timeframe(tf)
-                    await asyncio.sleep(0.5)
-                    if action == "ohlcv":
-                        val = await self.get_ohlcv(summary=True)
-                        if val is None:
-                            all_ok = False
-                        sym_data[tf] = val
-                    elif action == "studies":
-                        sym_data[tf] = await self.get_study_values()
-                if all_ok:
-                    results[sym] = sym_data
-                else:
+                data, ok = await _fetch(sym)
+                results[sym] = data
+                if not ok:
+                    logger.warning("batch: %s partially failed — will retry", sym)
                     failed.append(sym)
 
         try:
@@ -1062,50 +1058,36 @@ class TV:
                     break
                 syms = list(failed)
                 failed = []
-                log.info(
+                logger.info(
                     "batch: retry round %d/%d — waiting %ds for cooldown, retrying %d symbols",
                     round_num, len(RETRY_WAITS), wait_sec, len(syms),
                 )
                 await asyncio.sleep(wait_sec)
-                # Retry one symbol at a time with its own reset — avoids
+                # One symbol at a time with its own reset — avoids
                 # cascading rate limits across symbols in the same round.
                 for sym in syms:
                     await self._reset_chart_session()
                     await self.set_timeframe(original_tf)
-                    try:
-                        t0 = asyncio.get_running_loop().time()
-                        await self.set_symbol(sym, wait_data=False)
-                        elapsed = asyncio.get_running_loop().time() - t0
-                        if elapsed > 3:
-                            log.info("batch: %s retried in %.1fs", sym, elapsed)
-                    except SymbolNotFoundError:
-                        failed.append(sym)
-                        continue
-                    sym_data = {}
-                    all_ok = True
-                    for tf in timeframes:
-                        await self.set_timeframe(tf)
-                        await asyncio.sleep(0.5)
-                        if action == "ohlcv":
-                            val = await self.get_ohlcv(summary=True)
-                            if val is None:
-                                all_ok = False
-                            sym_data[tf] = val
-                        elif action == "studies":
-                            sym_data[tf] = await self.get_study_values()
-                    if all_ok:
-                        results[sym] = sym_data
-                    else:
+                    data, ok = await _fetch(sym)
+                    results[sym] = data
+                    if not ok:
                         failed.append(sym)
 
             if failed:
                 for sym in failed:
-                    results[sym] = {tf: None for tf in timeframes}
-                    log.warning("batch: %s failed after all retries — skipping", sym)
+                    # Keep any partial data already stored, only fill
+                    # truly missing timeframes as None.
+                    if sym not in results:
+                        results[sym] = {tf: None for tf in timeframes}
+                    else:
+                        for tf in timeframes:
+                            if tf not in results[sym]:
+                                results[sym][tf] = None
+                    logger.warning("batch: %s failed after all retries — skipping", sym)
 
         finally:
-            log.info("batch: restoring original state (%s, %s)", original_symbol, original_tf)
-            await asyncio.sleep(3)
+            logger.info("batch: restoring original state (%s)", original_symbol)
+            await asyncio.sleep(1)
             try:
                 await self.set_symbol(original_symbol)
             except SymbolNotFoundError:

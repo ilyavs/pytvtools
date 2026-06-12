@@ -137,6 +137,11 @@ class TVData:
             for item in _FRAME_RE.split(raw):
                 if not item:
                     continue
+                # Echo heartbeat fragments that may be concatenated
+                # with data frames in a single recv().
+                if item.startswith("~h~"):
+                    await self._ws.send(item)
+                    continue
                 try:
                     msg = json.loads(item)
                 except json.JSONDecodeError:
@@ -207,7 +212,7 @@ class TVData:
                 "open": bars[0]["open"],
                 "close": bars[-1]["close"],
                 "avg_volume": sum(b["volume"] for b in bars) / len(bars),
-                "range": closes[-1] - closes[0],
+                "range": f"{closes[-1] - closes[0]:.2f}",
                 "bars": len(bars),
             }
         return bars
