@@ -431,11 +431,6 @@ class TV:
     # Indicators
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _decode_study_name(raw: str) -> str:
-        """Decode TV's URL-encoded study name (``%1`` → space, etc.)."""
-        import urllib.parse
-        return urllib.parse.unquote(raw)
 
     async def search_indicators(self, query: str) -> list[dict[str, Any]]:
         """Search for indicators by keyword.
@@ -540,14 +535,11 @@ class TV:
                 seen_ids.add(r["id"])
                 results.append(r)
 
-        # Enrich with study_id
+        # Enrich with study_id — STD studies use pine type internally,
+        # so the raw "STD;Name" id is the correct pineId.
         for r in results:
             raw_id = r["id"]
-            if raw_id.startswith("STD;"):
-                name = self._decode_study_name(raw_id[4:])
-                r["study_id"] = f"{name}@tv-basicstudies"
-            else:
-                r["study_id"] = raw_id
+            r["study_id"] = raw_id
 
         await self._close_dialogs()
 
@@ -586,10 +578,17 @@ class TV:
             )
 
         if "@" in indicator:
-            # Built-in study ID — use _createStudy
+            # Built-in study ID (java type) — use _createStudy
             eid = await self._eval(f"""
             (function() {{
                 return {_CHART_API}._createStudy({{type: "java", studyId: {_js_str(indicator)}}});
+            }})()
+            """, await_promise=True)
+        elif indicator.startswith("STD;"):
+            # Built-in study (pine type) — e.g. STD;SMA, STD;RSI
+            eid = await self._eval(f"""
+            (function() {{
+                return {_CHART_API}._createStudy({{type: "pine", pineId: {_js_str(indicator)}}});
             }})()
             """, await_promise=True)
         elif indicator.startswith("PUB;"):

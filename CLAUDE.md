@@ -114,8 +114,16 @@ var eid = await chart()._createStudy({type: "pine", pineId: "PUB;85"});
 var eid = await chart().createStudy("Relative Strength Index");
 ```
 
-Study ID format: `Name@tv-basicstudies` for built-ins (RSI, MACD, etc.),
-`PUB;id` for community scripts, raw ID string for custom indicators (e.g. `SFFMev`).
+Study ID format:
+
+| Pattern | Example | Type |
+|---------|---------|------|
+| `STD;Name` | `STD;RSI`, `STD;SMA`, `STD;MACD` | Built-in (pine) |
+| `Name@tv-basicstudies` | `Volume@tv-basicstudies`, `VWAPAA@tv-basicstudies` | Built-in (java) |
+| `PUB;id` | `PUB;85`, `PUB;ULSu...` | Community script |
+| `PUB;Name` | `PUB;Relative Strength Index` (from createStudy) | Display name fallback |
+
+Prefer `STD;` IDs returned by `search_indicators` for built-in studies.
 
 ### Reading indicator values
 

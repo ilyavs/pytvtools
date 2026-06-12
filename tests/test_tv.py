@@ -426,7 +426,7 @@ class TestIndicatorSearch:
         # built-in first
         assert results[0]["id"] == "STD;RSI"
         assert results[0]["name"] == "Relative Strength Index"
-        assert results[0]["study_id"] == "RSI@tv-basicstudies"
+        assert results[0]["study_id"] == "STD;RSI"
         # then community
         assert results[1]["id"] == "PUB;131"
         assert results[1]["study_id"] == "PUB;131"
@@ -463,7 +463,7 @@ class TestIndicatorSearch:
         ]
         results = await tv.search_indicators("RSI")
         assert len(results) == 1
-        assert results[0]["study_id"] == "RSI@tv-basicstudies"
+        assert results[0]["study_id"] == "STD;RSI"
 
     async def test_search_indicators_only_community(self, mock_cdp):
         tv, cdp = mock_cdp
@@ -705,14 +705,3 @@ class TestScriptGeneration:
         assert "_data._items" in expr
 
 
-class TestDecodeStudyName:
-    """_decode_study_name static method."""
-
-    def test_simple_name(self):
-        assert TV._decode_study_name("STD;RSI") == "STD;RSI"
-
-    def test_url_encoded_name(self):
-        assert TV._decode_study_name("STD;Bollinger%20Bands") == "STD;Bollinger Bands"
-
-    def test_special_chars(self):
-        assert TV._decode_study_name("STD;RSI%2B") == "STD;RSI+"
