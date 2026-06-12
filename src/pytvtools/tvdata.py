@@ -122,10 +122,7 @@ class TVData:
         deadline = loop.time() + _TIMEOUT
 
         while loop.time() < deadline:
-            try:
-                raw = await asyncio.wait_for(self._ws.recv(), timeout=5)
-            except asyncio.TimeoutError:
-                break
+            raw = await self._ws.recv()
 
             if isinstance(raw, bytes):
                 raw = raw.decode("utf-8")

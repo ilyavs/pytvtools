@@ -572,10 +572,10 @@ class TestCapture:
 
     async def test_capture_screenshot(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp._send = AsyncMock(return_value={"data": "base64data"})
+        cdp.send_command = AsyncMock(return_value={"data": "base64data"})
         result = await tv.capture_screenshot()
         assert result == "base64data"
-        cdp._send.assert_awaited_once_with(
+        cdp.send_command.assert_awaited_once_with(
             "Page.captureScreenshot",
             {"format": "png", "fromSurface": True},
         )
@@ -691,10 +691,10 @@ class TestScriptGeneration:
 
     async def test_capture_uses_page_domain(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp._send = AsyncMock(return_value={"data": ""})
+        cdp.send_command = AsyncMock(return_value={"data": ""})
         await tv.capture_screenshot()
-        cdp._send.assert_awaited_once()
-        assert cdp._send.call_args[0][0] == "Page.captureScreenshot"
+        cdp.send_command.assert_awaited_once()
+        assert cdp.send_command.call_args[0][0] == "Page.captureScreenshot"
 
     async def test_study_values_js_uses_chart_api(self, mock_cdp):
         tv, cdp = mock_cdp

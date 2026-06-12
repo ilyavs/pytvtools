@@ -49,7 +49,9 @@ async with TVData() as d:
 - `get_visible_range()` → `{from, to}`
 - `get_ohlcv(count=500, summary=False)` → bars or stats
 - `get_quote()` → `{symbol: str}`
+- `wait_for_chart_ready(expected_symbol=None, timeout=10)` → `bool`
 - `get_study_values()` → `{name: {title, values: [{timestamp, value}]}}`
+- `get_indicator_data(entity_id)` → all historical plot values per plot name
 - `search_indicators(query)` → `[{id, name, study_id}]`
 - `add_indicator(indicator, inputs=None)` → entity ID (e.g. `"RSI@tv-basicstudies"`)
 - `remove_indicator(entity_id)`
@@ -61,9 +63,12 @@ async with TVData() as d:
 - `capture_screenshot()` → base64 PNG
 - `get_pine_lines(study_filter=None)` → price levels
 - `get_pine_labels(study_filter=None, max_labels=50)` → text labels
-- `batch(symbols, timeframes, action)` — multi-symbol scan
+- `get_pine_boxes(study_filter=None)` → price zones
+- `get_pine_tables(study_filter=None)` → formatted text rows
+- `batch(symbols, timeframes, action)` — multi-symbol scan (CDP-based, handles rate limits)
 - `pine_set_source(source)` — inject Pine code
 - `pine_compile()` — compile and read errors
+- `set_symbol(symbol, timeout=10, wait_data=True)` — `wait_data=False` skips chart-ready check
 
 ## MCP server (optional)
 

@@ -490,12 +490,15 @@ class TV:
         results = results or []
 
         # Trigger server-side search for community scripts
-        await self._eval(f"""
+        search_ok = await self._eval(f"""
         (function() {{
             var d = window.TradingViewApi._studyMarket._dialog;
-            if (d && d._handleSearch) d._handleSearch({_js_str(query)});
+            if (d && d._handleSearch) {{ d._handleSearch({_js_str(query)}); return true; }}
+            return false;
         }})()
         """)
+        if not search_ok:
+            logger.warning("search_indicators: _handleSearch not found — server-side search may not work")
         await asyncio.sleep(2)
 
         # Read community results from the dialog's search results
@@ -722,9 +725,7 @@ class TV:
                 break
 
         if not found:
-            raise RuntimeError(
-                f"Template {_js_str(name)} not found in any tab"
-            )
+            raise RuntimeError(f"Template '{name}' not found in any tab")
 
         await asyncio.sleep(1)
         await self._close_dialogs()
@@ -888,17 +889,20 @@ class TV:
         """Returns base64-encoded PNG."""
         if not self._cdp:
             raise RuntimeError("Not connected")
-        result = await self._cdp._send(
+        result = await self._cdp.send_command(
             "Page.captureScreenshot",
             {"format": "png", "fromSurface": True},
         )
         return result.get("data", "")
 
     async def get_indicator_data(self, entity_id: str) -> dict[str, Any] | None:
-        """Get ALL historical plot data for an indicator by entity ID.
+        """Get ALL historical plot values for an indicator by entity ID.
 
-        Returns all plot values across all bars — unlike ``get_study_values``
-        which only returns the last value per study.
+        Returns multi-plot data organized by plot name with per-bar
+        ``{timestamp, value}`` arrays — unlike ``get_study_values``
+        which filters data through the public API and only returns the
+        last value per study.  This method reads from the internal data
+        source directly.
 
         Parameters
         ----------
@@ -959,7 +963,7 @@ class TV:
                 var values = [];
                 for (var i = 0; i < items.length; i++) {{
                     var v = items[i].value;
-                    values.push({{timestamp: v[0], value: v[p + 1]}});
+                    values.push({{timestamp: v[0], value: (v.length > p + 1 ? v[p + 1] : null)}});
                 }}
                 plots.push({{name: pname, values: values}});
             }}
@@ -997,6 +1001,9 @@ class TV:
         Always restores the original chart state.
         """
         import asyncio
+        if action not in ("ohlcv", "studies"):
+            raise ValueError(f"batch: unknown action {action!r} (expected 'ohlcv' or 'studies')")
+
         state = await self.get_state()
         original_symbol = state["symbol"]
         original_tf = state["timeframe"]
@@ -1024,7 +1031,10 @@ class TV:
                         ok = False
                     data[tf] = val
                 elif action == "studies":
-                    data[tf] = await self.get_study_values()
+                    val = await self.get_study_values()
+                    if not val:
+                        ok = False
+                    data[tf] = val
             return data, ok
 
         async def _process_batch(syms: list[str]) -> None:
@@ -1092,7 +1102,10 @@ class TV:
                 await self.set_symbol(original_symbol)
             except SymbolNotFoundError:
                 pass
-            await self.set_timeframe(original_tf)
+            try:
+                await self.set_timeframe(original_tf)
+            except Exception:
+                pass
 
         return results
 

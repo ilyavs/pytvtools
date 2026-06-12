@@ -68,6 +68,10 @@ class CdpConnection:
             return val.get("value")
         return val.get("objectId")
 
+    async def send_command(self, method: str, params: dict | None = None) -> dict:
+        """Send an arbitrary CDP command and return its result."""
+        return await self._send(method, params)
+
     async def close(self) -> None:
         if self._ws:
             await self._ws.close()

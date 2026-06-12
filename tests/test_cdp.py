@@ -135,8 +135,8 @@ class TestCdpConnection:
         with patch("websockets.connect", AsyncMock(return_value=mock_ws)):
             cdp = CdpConnection("ws://localhost:9222/devtools/page/abc")
             await cdp.connect()
-            await cdp._send("Runtime.evaluate", {"expression": "1"})
-            await cdp._send("Runtime.evaluate", {"expression": "2"})
+            await cdp.send_command("Runtime.evaluate", {"expression": "1"})
+            await cdp.send_command("Runtime.evaluate", {"expression": "2"})
         assert mock_ws.send.call_count == 3
         ids = [json.loads(c[0][0])["id"] for c in mock_ws.send.call_args_list]
         assert ids == [1, 2, 3]
