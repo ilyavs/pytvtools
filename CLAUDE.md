@@ -53,7 +53,7 @@ async with TVData() as d:
 - `get_study_values()` → `{name: {title, values: [{timestamp, value}]}}`
 - `get_indicator_data(entity_id)` → all historical plot values per plot name
 - `search_indicators(query)` → `[{id, name, study_id}]`
-- `add_indicator(indicator, inputs=None)` → entity ID (e.g. `"RSI@tv-basicstudies"`)
+- `add_indicator(indicator, inputs=None)` → entity ID (e.g. `"STD;RSI"`, `"PUB;85"`)
 - `remove_indicator(entity_id)`
 - `remove_all_indicators()`
 - `set_indicator_inputs(entity_id, inputs)`
@@ -98,14 +98,18 @@ Methods on `chart()`:
 - `removeEntity(id)`, `removeAllStudies()`
 - `chartWidget()` → raw widget
   - `chartWidget().model()` → chart model with `dataSources()`, `dataSourceForId(id)`, `panes()`, `createStudyInserter()`, `removeSource()`
-- `_createStudy({type: "java", studyId: "Name@tv-basicstudies"})` — returns Promise<string> with entity ID
+- `_createStudy({type: "pine", pineId: "STD;Name"})` — built-in pine studies (most common)
+- `_createStudy({type: "java", studyId: "Name@tv-basicstudies"})` — java-type built-ins (Volume, VWAPAA)
 
 ### Adding indicators
 
 ```javascript
-// Built-in — uses _createStudy to bypass metadata lookup
-var eid = await chart()._createStudy({type: "java", studyId: "RSI@tv-basicstudies"});
+// Built-in (pine) — most common
+var eid = await chart()._createStudy({type: "pine", pineId: "STD;RSI"});
 // eid is the entity ID string e.g. "2tMAgd"
+
+// Built-in (java) — Volume, VWAPAA, etc.
+var eid = await chart()._createStudy({type: "java", studyId: "RSI@tv-basicstudies"});
 
 // Community script (Pine Script from TradingView's platform)
 var eid = await chart()._createStudy({type: "pine", pineId: "PUB;85"});

@@ -142,9 +142,9 @@ pytest tests/ -m integration -v --capture=no
 The full internal API map (public chart API vs widget internals, study ID formats, plot value access, glitch avoidance) is in [`CLAUDE.md`](CLAUDE.md). Key points:
 
 - Use `window.TradingViewApi.chart()` — the public API, avoids the "temporary glitch" screen
-- Add indicators via `chart()._createStudy({type: "java", studyId: "Name@tv-basicstudies"})`
+- Add indicators via `chart()._createStudy({type: "pine", pineId: "STD;RSI"})` for built-ins, `{type: "java", studyId: "Name@tv-basicstudies"}` for java-type built-ins
 - Read plot values via `model.dataSourceForId(id)._data._items`
-- Study ID format: `Name@tv-basicstudies` for built-ins, raw ID for custom
+- Study ID formats: `STD;Name` (pine) or `Name@tv-basicstudies` (java) for built-ins, `PUB;id` for community
 
 ## MCP server (optional)
 
