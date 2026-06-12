@@ -46,8 +46,10 @@ Host edits → src/pytvtools/*.py → mounted to /app → runs in container
 | `src/pytvtools/tvdata.py` | `TVData` — direct WebSocket OHLCV fetcher (no CDP) |
 | `src/pytvtools/cdp.py` | `CdpConnection` — WebSocket transport, `Runtime.evaluate` |
 | `src/pytvtools/chrome.py` | `Chrome` — launch/stop/restart headless Chrome |
+| `src/pytvtools/collector.py` | `Collector` — multi-symbol batch data collection + parquet export |
 | `src/pytvtools/mcp_server.py` | MCP server wrapping all TV methods |
 | `src/pytvtools/__init__.py` | Public exports |
+| `src/pytvtools/watchlists.py` | `Watchlist` — frozen dataclass + predefined watchlists |
 | `tests/test_tv.py` | Unit tests for TV methods |
 | `tests/test_tvdata.py` | Unit tests for TVData direct WS fetcher |
 | `tests/test_cdp.py` | Unit tests for CDP transport |

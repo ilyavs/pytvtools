@@ -631,6 +631,32 @@ class TestBatch:
         result = await tv.batch(["AAPL"], ["D"], action="studies")
         assert "AAPL" in result
 
+    async def test_batch_all(self, mock_cdp):
+        tv, cdp = mock_cdp
+        restore_ready = {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "BTCUSD"}
+        cdp.evaluate.side_effect = [
+            {"symbol": "BTCUSD", "timeframe": "D", "chartType": 1},  # get_state
+            "BTCUSD", None, "AAPL",  # set_symbol AAPL
+            None,                # set_timeframe
+            {"count": 3, "high": 150, "low": 100, "open": 120, "close": 140, "avg_volume": 1000000, "range": "50.00"},  # get_ohlcv
+            {"RSI": {"title": "RSI", "values": [{"timestamp": 1, "value": 50}]}},  # get_study_values
+            "AAPL", None, "BTCUSD", restore_ready, restore_ready, restore_ready,  # restore state
+            None,                # restore set_timeframe
+        ]
+        result = await tv.batch(["AAPL"], ["D"], action="all")
+        assert "AAPL" in result
+        entry = result["AAPL"]["D"]
+        assert isinstance(entry, dict)
+        assert "ohlcv" in entry
+        assert "studies" in entry
+        assert entry["ohlcv"]["count"] == 3
+        assert entry["studies"]["RSI"]["values"][0]["value"] == 50
+
+    async def test_batch_invalid_action(self, mock_cdp):
+        tv, cdp = mock_cdp
+        with pytest.raises(ValueError, match="unknown action"):
+            await tv.batch(["AAPL"], ["D"], action="baloney")
+
 
 class TestPineEditor:
     """Pine Script editor methods."""

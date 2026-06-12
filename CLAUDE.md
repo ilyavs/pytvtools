@@ -13,6 +13,8 @@ Pure Python CDP library for TradingView in Chrome. No Node.js, no submodules.
 | `src/pytvtools/chrome.py` | `Chrome` — launch/stop/restart headless Chrome with CDP |
 | `src/pytvtools/tv.py` | `TV` — high-level TradingView client (CDP-based) |
 | `src/pytvtools/tvdata.py` | `TVData` — direct WebSocket OHLCV fetcher (no CDP, fast) |
+| `src/pytvtools/collector.py` | `Collector` — multi-symbol batch data collection + parquet/JSON export |
+| `src/pytvtools/watchlists.py` | `Watchlist` — frozen dataclass + predefined watchlists (SPDR sectors, industries) |
 | `src/pytvtools/__init__.py` | Re-exports |
 
 ## Usage
@@ -165,6 +167,29 @@ from pytvtools import Chrome
 chrome = Chrome()
 await chrome.start(headless=True)
 ```
+
+## Collector (multi-symbol + parquet export)
+
+```python
+from pytvtools import Collector, CollectorConfig
+
+config = CollectorConfig(
+    symbols=["NASDAQ:AAPL", "BINANCE:BTCUSDT"],
+    timeframes=["1D", "60"],
+    actions=["ohlcv", "studies"],  # or ["ohlcv"] for OHLCV-only
+)
+collector = Collector(config)
+async with TV() as tv:
+    result = await collector.run(tv)          # returns CollectResult
+path = collector.export_parquet("data.parquet")
+# JSON (no extra deps, always available)
+path = collector.export_json("data.json")
+```
+
+Record schema (parquet/JSON):
+- `symbol`, `timeframe`, `scan_ts` — identification
+- `ohlcv_count`, `ohlcv_high`, `ohlcv_low`, `ohlcv_open`, `ohlcv_close`, `ohlcv_avg_volume`, `ohlcv_range` — OHLCV summary stats
+- `st_<study name>` — latest value for each indicator (prefixed with `st_`)
 
 ## Remote tunnel
 

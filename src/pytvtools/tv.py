@@ -732,69 +732,92 @@ class TV:
     async def set_indicator_inputs(
         self, entity_id: str, inputs: dict[str, Any]
     ) -> None:
-        """Change input values on an existing indicator."""
+        """Change input values on an existing indicator.
+
+        Retries up to 10 times with 500ms delay for cases where the study
+        was just created and isn't yet registered in the chart model.
+        """
+        import asyncio
+
         overrides = json.dumps(inputs)
-        await self._eval(f"""
-        (function() {{
-            var id = {_js_str(entity_id)};
-            var inputs = {overrides};
-            var chart = {_CHART_API};
-            var model = chart.chartWidget().model();
+        for attempt in range(10):
+            ok = await self._eval(f"""
+            (function() {{
+                var id = {_js_str(entity_id)};
+                var inputs = {overrides};
+                var chart = {_CHART_API};
+                var model = chart.chartWidget().model();
 
-            var study = null;
+                var study = null;
 
-            // Strategy 1: public API
-            try {{ study = chart.getStudyById(id); }} catch(e) {{}}
+                // Strategy 1: public API
+                try {{ study = chart.getStudyById(id); }} catch(e) {{}}
 
-            // Strategy 2: dataSourceForId internals
-            if (!study) {{
-                try {{
-                    var ds = model.dataSourceForId(id);
-                    if (ds) {{
-                        if (ds._study) {{
-                            study = ds._study;
-                        }} else if (ds._source) {{
-                            study = ds._source;
-                        }}
-                    }}
-                }} catch(e) {{}}
-            }}
-
-            // Strategy 3: search studies in panes
-            if (!study) {{
-                try {{
-                    var panes = model.panes() || [];
-                    for (var p = 0; p < panes.length; p++) {{
-                        if (!panes[p].dataSources) continue;
-                        var srcs = panes[p].dataSources() || [];
-                        for (var s = 0; s < srcs.length; s++) {{
-                            var src = srcs[s];
-                            var srcId = src.id ? src.id() : src._id || '';
-                            if (srcId === id) {{
-                                study = src._study || src._source || src;
-                                break;
+                // Strategy 2: dataSourceForId internals
+                if (!study) {{
+                    try {{
+                        var ds = model.dataSourceForId(id);
+                        if (ds) {{
+                            if (ds._study) {{
+                                study = ds._study;
+                            }} else if (ds._source) {{
+                                study = ds._source;
                             }}
                         }}
-                        if (study) break;
-                    }}
-                }} catch(e) {{}}
-            }}
-
-            if (!study) throw new Error('Study not found: ' + id);
-
-            for (var k in inputs) {{
-                if (study.setInputValue) {{
-                    study.setInputValue(k, inputs[k]);
-                }} else if (study._inputValues) {{
-                    study._inputValues[k] = inputs[k];
+                    }} catch(e) {{}}
                 }}
-            }}
 
-            if (study.recalc) study.recalc();
-            if (model.fullRecalc) model.fullRecalc();
-            return true;
-        }})()
-        """)
+                // Strategy 3: search studies in panes
+                if (!study) {{
+                    try {{
+                        var panes = model.panes() || [];
+                        for (var p = 0; p < panes.length; p++) {{
+                            if (!panes[p].dataSources) continue;
+                            var srcs = panes[p].dataSources() || [];
+                            for (var s = 0; s < srcs.length; s++) {{
+                                var src = srcs[s];
+                                var srcId = src.id ? src.id() : src._id || '';
+                                if (srcId === id) {{
+                                    study = src._study || src._source || src;
+                                    break;
+                                }}
+                            }}
+                            if (study) break;
+                        }}
+                    }} catch(e) {{}}
+                }}
+
+                if (!study) return false;
+
+                if (study.setInputValues) {{
+                    var arr = [];
+                    for (var k in inputs) {{
+                        arr.push({{id: k, value: inputs[k]}});
+                    }}
+                    study.setInputValues(arr);
+                }} else {{
+                    for (var k in inputs) {{
+                        if (study.setInputValue) {{
+                            study.setInputValue(k, inputs[k]);
+                        }} else if (study._inputValues) {{
+                            study._inputValues[k] = inputs[k];
+                        }}
+                    }}
+                    if (study.recalc) study.recalc();
+                }}
+
+                if (model.fullRecalc) model.fullRecalc();
+                return true;
+            }})()
+            """)
+            if ok:
+                return
+            await asyncio.sleep(0.5)
+
+        logger.warning(
+            "Could not set inputs on study %s (not found after 10 retries)",
+            entity_id,
+        )
 
     # ------------------------------------------------------------------
     # Pine Script
@@ -996,12 +1019,20 @@ class TV:
         4. Stores partial data per-timeframe even if some timeframes
            fail — no data is discarded.
 
+        Parameters
+        ----------
+        action : str
+            ``"ohlcv"`` — summary stats only.
+            ``"studies"`` — indicator values only.
+            ``"all"`` — both in one pass, returns nested dict per
+            timeframe: ``{"ohlcv": ..., "studies": ...}``.
+
         Returns results for every symbol (partial data on failure).
         Always restores the original chart state.
         """
         import asyncio
-        if action not in ("ohlcv", "studies"):
-            raise ValueError(f"batch: unknown action {action!r} (expected 'ohlcv' or 'studies')")
+        if action not in ("ohlcv", "studies", "all"):
+            raise ValueError(f"batch: unknown action {action!r} (expected 'ohlcv', 'studies' or 'all')")
 
         state = await self.get_state()
         original_symbol = state["symbol"]
@@ -1034,6 +1065,12 @@ class TV:
                     if not val:
                         ok = False
                     data[tf] = val
+                elif action == "all":
+                    ohlcv_val = await self.get_ohlcv(summary=True)
+                    studies_val = await self.get_study_values()
+                    if ohlcv_val is None and not studies_val:
+                        ok = False
+                    data[tf] = {"ohlcv": ohlcv_val, "studies": studies_val}
             return data, ok
 
         async def _process_batch(syms: list[str]) -> None:
@@ -1072,8 +1109,6 @@ class TV:
                     round_num, len(RETRY_WAITS), wait_sec, len(syms),
                 )
                 await asyncio.sleep(wait_sec)
-                # One symbol at a time with its own reset — avoids
-                # cascading rate limits across symbols in the same round.
                 for sym in syms:
                     await self._reset_chart_session()
                     await self.set_timeframe(original_tf)
@@ -1084,8 +1119,6 @@ class TV:
 
             if failed:
                 for sym in failed:
-                    # Keep any partial data already stored, only fill
-                    # truly missing timeframes as None.
                     if sym not in results:
                         results[sym] = {tf: None for tf in timeframes}
                     else:
