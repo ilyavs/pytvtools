@@ -184,7 +184,7 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "indicator": {"type": "string", "description": "Study ID (RSI@tv-basicstudies) or display name (Relative Strength Index)"},
+                    "indicator": {"type": "string", "description": "Study ID (STD;RSI, STD;SMA, RSI@tv-basicstudies) or display name (Relative Strength Index)"},
                     "inputs": {"type": "object", "description": "Optional input overrides, e.g. {\"length\": 20}"},
                 },
                 "required": ["indicator"],
@@ -354,15 +354,20 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             return [TextContent(type="text", text=json.dumps({"error": str(e)}, indent=2))]
 
 
-async def main():
+async def _run():
     async with mcp.server.stdio.stdio_server() as (read, write):
         await server.run(
             read, write, InitializationOptions(
                 server_name="pytvtools",
                 server_version="0.1.0",
+                capabilities={"tools": {}},
             )
         )
 
 
+def main():
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
