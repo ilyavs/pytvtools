@@ -95,7 +95,10 @@ class TVData:
         Args:
             symbol: TradingView symbol (e.g. "NASDAQ:AAPL", "BINANCE:BTCUSDT").
             interval: Timeframe ("1", "5", "15", "60", "D", "W", etc.).
-            bars_count: Number of bars to fetch (max 5000 for free tier).
+            bars_count: Number of bars to fetch.  Supported limits vary
+                by symbol and timeframe — SP:SPX handles 5000 on any TF,
+                crypto/high-frequency TFs may cap at ~4179 (1D), and
+                weekly/monthly caps are tighter (139-2375).
             summary: If True, return summary stats instead of all bars.
 
         Returns:
@@ -217,9 +220,10 @@ class TVData:
             symbols: List of TradingView symbols (e.g. ``"NASDAQ:AAPL"``).
             interval: Timeframe (``"1"``, ``"5"``, ``"15"``, ``"60"``,
                 ``"D"``, ``"W"``, etc.).
-            bars_count: Number of bars per symbol (max 5000 for free tier).
+            bars_count: Number of bars per symbol.  See :meth:`get_ohlcv`
+                for per-symbol/per-TF limits.
             summary: If True, return summary stats instead of all bars.
-            max_concurrent: Max parallel connections (default 10).
+            max_concurrent: Max parallel connections (default 5).
 
         Returns
         -------
