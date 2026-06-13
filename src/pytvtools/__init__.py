@@ -2,7 +2,7 @@ from pytvtools.tv import TV, TooManyIndicatorsError, SymbolNotFoundError
 from pytvtools.cdp import CdpConnection, CdpError, find_tv_target, wait_for_cdp, make_ws_url, get_targets
 from pytvtools.chrome import Chrome
 from pytvtools.tvdata import TVData
-from pytvtools.collector import Collector, CollectorConfig, CollectResult
+from pytvtools.collector import Collector, CollectorConfig, CollectResult, TVDataCollector, TVDataCollectorConfig
 
 __all__ = [
     "TV",
@@ -11,6 +11,8 @@ __all__ = [
     "Collector",
     "CollectorConfig",
     "CollectResult",
+    "TVDataCollector",
+    "TVDataCollectorConfig",
     "CdpConnection",
     "CdpError",
     "TooManyIndicatorsError",

@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from pytvtools.tv import TV
+from pytvtools.tvdata import TVData
 
 
 _PYARROW: tuple | None = None
@@ -294,6 +295,165 @@ class Collector:
                 vals = info["values"]
                 if vals:
                     record[f"st_{name}"] = vals[-1]["value"]
+
+
+# ---------------------------------------------------------------------------
+# TVDataCollector — OHLCV-only, no CDP/Chrome needed
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class TVDataCollectorConfig:
+    """Configuration for CDP-free OHLCV data collection via TVData.
+
+    Attributes
+    ----------
+    symbols : list[str]
+        TradingView symbol strings (e.g. ``"SP:SPX"``).
+    timeframes : list[str]
+        Timeframe strings (``"1D"``, ``"60"``, etc.).
+    bars_count : int
+        Bars per symbol×timeframe (default 500).
+    max_concurrent : int
+        Max parallel WS connections per timeframe (default 5).
+    """
+    symbols: list[str]
+    timeframes: list[str]
+    bars_count: int = 500
+    max_concurrent: int = 5
+
+
+class TVDataCollector:
+    """Fetch OHLCV across multiple symbols/timeframes via TVData (no Chrome).
+
+    Opens one WebSocket connection per symbol per timeframe, up to
+    ``max_concurrent`` at a time.  Exports to parquet or JSON.
+
+    Usage::
+
+        from pytvtools import TVDataCollector
+
+        collector = TVDataCollector(
+            symbols=["SP:SPX", "COINBASE:BTCUSD"],
+            timeframes=["1D", "60"],
+            bars_count=500,
+        )
+        result = await collector.run()
+        collector.export_parquet("data.parquet")
+    """
+
+    def __init__(
+        self,
+        symbols: list[str],
+        timeframes: list[str],
+        bars_count: int = 500,
+        max_concurrent: int = 5,
+    ) -> None:
+        self.config = TVDataCollectorConfig(
+            symbols=symbols,
+            timeframes=timeframes,
+            bars_count=bars_count,
+            max_concurrent=max_concurrent,
+        )
+        self._result: CollectResult | None = None
+
+    async def run(self) -> CollectResult:
+        """Execute collection across all symbols/timeframes."""
+        start_ts = datetime.now(timezone.utc)
+        cfg = self.config
+        logger.info(
+            "TVDataCollector: fetching %d symbols x %d timeframes, bars=%d, concurrency=%d",
+            len(cfg.symbols), len(cfg.timeframes), cfg.bars_count, cfg.max_concurrent,
+        )
+
+        merged: dict[tuple[str, str], dict[str, Any]] = {}
+        failed_symbols: set[str] = set()
+
+        for tf in cfg.timeframes:
+            logger.info("TVDataCollector: timeframe=%s ...", tf)
+            try:
+                async with TVData() as d:
+                    results = await d.get_ohlcv_multi(
+                        cfg.symbols, tf, cfg.bars_count,
+                        summary=True, max_concurrent=cfg.max_concurrent,
+                    )
+                for sym, val in results.items():
+                    if isinstance(val, dict) and "error" not in val:
+                        key = (sym, tf)
+                        merged[key] = {
+                            "symbol": sym,
+                            "timeframe": tf,
+                            "scan_ts": start_ts,
+                            **{f"ohlcv_{k}": v for k, v in val.items()},
+                        }
+                    else:
+                        failed_symbols.add(sym)
+                        logger.warning("TVDataCollector: %s / %s failed: %s", sym, tf, val.get("error", "unknown"))
+            except Exception as e:
+                logger.error("TVDataCollector: timeframe=%s error: %s", tf, e)
+                for sym in cfg.symbols:
+                    failed_symbols.add(sym)
+
+        records = list(merged.values())
+        symbols_failed = sorted(failed_symbols)
+        end_ts = datetime.now(timezone.utc)
+
+        result = CollectResult(
+            records=records,
+            symbols_total=len(cfg.symbols),
+            symbols_failed=symbols_failed,
+            start_ts=start_ts,
+            end_ts=end_ts,
+        )
+        self._result = result
+        logger.info(
+            "TVDataCollector: done — %d records, %d/%d symbols failed",
+            len(records), len(symbols_failed), len(cfg.symbols),
+        )
+        return result
+
+    def export_parquet(
+        self,
+        path: str | Path,
+        *,
+        overwrite: bool = False,
+    ) -> Path:
+        """Same as :meth:`Collector.export_parquet`."""
+        if self._result is None:
+            raise RuntimeError("Call run() before export_parquet()")
+        pa, pq = _get_pyarrow()
+        path = Path(path)
+        if path.suffix.lower() != ".parquet":
+            path = path.with_suffix(".parquet")
+        if path.exists() and not overwrite:
+            raise FileExistsError(f"{path} exists — set overwrite=True to replace")
+        records = self._result.records
+        if not records:
+            table = _empty_table()
+            pq.write_table(table, path)
+            return path
+        table = _records_to_table(records)
+        pq.write_table(table, path, compression="zstd")
+        logger.info("TVDataCollector: exported %d records to %s", len(records), path)
+        return path
+
+    def export_json(
+        self,
+        path: str | Path,
+        *,
+        overwrite: bool = False,
+    ) -> Path:
+        """Same as :meth:`Collector.export_json`."""
+        if self._result is None:
+            raise RuntimeError("Call run() before export_json()")
+        path = Path(path)
+        if path.exists() and not overwrite:
+            raise FileExistsError(f"{path} exists — set overwrite=True to replace")
+        with open(path, "w", encoding="utf-8") as f:
+            for rec in self._result.records:
+                f.write(json.dumps(rec, default=str) + "\n")
+        logger.info("TVDataCollector: exported %d records to %s", len(self._result.records), path)
+        return path
 
 
 # ---------------------------------------------------------------------------
