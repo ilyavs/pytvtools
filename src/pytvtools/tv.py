@@ -34,6 +34,7 @@ class SymbolNotFoundError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 _CHART_API = "window.TradingViewApi.chart()"
+_REPLAY_API = "window.TradingViewApi._replayApi"
 
 
 
@@ -1143,6 +1144,108 @@ class TV:
                 pass
 
         return results
+
+    # ------------------------------------------------------------------
+    # Bar replay
+    # ------------------------------------------------------------------
+
+    async def replay_start(self, date: str | None = None) -> dict[str, Any]:
+        """Enter bar-replay mode, optionally at a specific date.
+
+        Parameters
+        ----------
+        date : str | None
+            ISO date (``"2024-01-15"``) or ``None`` for the first
+            available date.
+
+        Returns
+        -------
+        dict
+            Keys: ``success``, ``replay_started``, ``date``,
+            ``current_date``.
+        """
+        import asyncio
+        rp = _REPLAY_API
+        available = await self._eval(f"{rp}.isReplayAvailable()")
+        if not available:
+            return {"success": False, "error": "Replay not available for this symbol/timeframe"}
+
+        await self._eval(f"{rp}.showReplayToolbar()")
+        await asyncio.sleep(0.5)
+
+        if date:
+            await self._eval(f"{rp}.selectDate(new Date({_js_str(date)}))")
+        else:
+            await self._eval(f"{rp}.selectFirstAvailableDate()")
+        await asyncio.sleep(1)
+
+        started = await self._eval(f"{rp}.isReplayStarted()")
+        current_date = await self._eval(f"{rp}.currentDate()")
+        return {
+            "success": True,
+            "replay_started": bool(started),
+            "date": date or "(first available)",
+            "current_date": current_date,
+        }
+
+    async def replay_stop(self) -> dict[str, Any]:
+        """Stop replay mode and return to realtime."""
+        rp = _REPLAY_API
+        started = await self._eval(f"{rp}.isReplayStarted()")
+        if not started:
+            await self._eval(f"{rp}.hideReplayToolbar()")
+            return {"success": True, "action": "already_stopped"}
+        await self._eval(f"{rp}.stopReplay()")
+        await self._eval(f"{rp}.hideReplayToolbar()")
+        return {"success": True, "action": "replay_stopped"}
+
+    async def replay_status(self) -> dict[str, Any]:
+        """Get current replay mode state."""
+        rp = _REPLAY_API
+        result = await self._eval(f"""
+        (function() {{
+            var r = {rp};
+            return {{
+                is_replay_available: r.isReplayAvailable(),
+                is_replay_started: r.isReplayStarted(),
+                is_autoplay_started: r.isAutoplayStarted(),
+                replay_mode: r.replayMode(),
+                current_date: r.currentDate(),
+                autoplay_delay: r.autoplayDelay(),
+            }};
+        }})()
+        """)
+        return result
+
+    async def replay_step(self) -> dict[str, Any]:
+        """Advance one bar in replay mode."""
+        rp = _REPLAY_API
+        started = await self._eval(f"{rp}.isReplayStarted()")
+        if not started:
+            return {"success": False, "error": "Replay not started. Call replay_start() first."}
+        await self._eval(f"{rp}.doStep()")
+        current_date = await self._eval(f"{rp}.currentDate()")
+        return {"success": True, "action": "step", "current_date": current_date}
+
+    async def replay_autoplay(self, speed: int = 0) -> dict[str, Any]:
+        """Toggle autoplay in replay mode, optionally set speed.
+
+        Parameters
+        ----------
+        speed : int
+            Autoplay delay in ms (lower = faster). ``0`` to just toggle.
+        """
+        rp = _REPLAY_API
+        started = await self._eval(f"{rp}.isReplayStarted()")
+        if not started:
+            return {"success": False, "error": "Replay not started. Call replay_start() first."}
+        speed = int(speed)
+        if speed > 0:
+            await self._eval(f"{rp}.changeAutoplayDelay({speed})")
+        await self._eval(f"{rp}.toggleAutoplay()")
+        is_autoplay = await self._eval(f"{rp}.isAutoplayStarted()")
+        delay = await self._eval(f"{rp}.autoplayDelay()")
+        return {"success": True, "autoplay_active": bool(is_autoplay), "delay_ms": delay}
 
     # ------------------------------------------------------------------
     # Internal helpers
