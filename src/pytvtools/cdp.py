@@ -11,7 +11,6 @@ import logging
 import os
 from typing import Any
 
-import httpx
 import websockets
 
 logger = logging.getLogger(__name__)
@@ -108,10 +107,23 @@ class CdpConnection:
 # ---------------------------------------------------------------------------
 
 
+def _get_httpx():
+    """Lazy import: httpx is only needed for CDP HTTP discovery (TV class)."""
+    try:
+        import httpx
+        return httpx
+    except ImportError:
+        raise ImportError(
+            "pytvtools[full] required for CDP features. "
+            "Install: pip install pytvtools[full]"
+        )
+
+
 async def get_targets(
     host: str = CDP_HOST, port: int = CDP_PORT
 ) -> list[dict[str, Any]]:
     """List all CDP targets (tabs)."""
+    httpx = _get_httpx()
     async with httpx.AsyncClient() as client:
         resp = await client.get(f"http://{host}:{port}/json/list", timeout=10)
         resp.raise_for_status()
@@ -140,6 +152,7 @@ async def wait_for_cdp(
     timeout: float = 30.0,
 ) -> bool:
     """Poll until Chrome's CDP endpoint is reachable."""
+    httpx = _get_httpx()
     async with httpx.AsyncClient() as client:
         for _ in range(int(timeout / 0.5)):
             try:
@@ -171,6 +184,7 @@ async def get_browser_ws_url(
     host: str = CDP_HOST, port: int = CDP_PORT
 ) -> str:
     """Get the browser-level WebSocket URL from /json/version."""
+    httpx = _get_httpx()
     async with httpx.AsyncClient() as client:
         resp = await client.get(f"http://{host}:{port}/json/version", timeout=10)
         resp.raise_for_status()

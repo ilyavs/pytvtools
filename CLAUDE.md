@@ -77,14 +77,15 @@ async with TVData() as d:
 - `replay_step()` — advance one bar in replay mode
 - `replay_autoplay(speed=0)` — toggle autoplay, optionally set delay (ms)
 
-## MCP server (optional)
+## MCP server (optional, host-side)
 
 ```bash
 # pip install pytvtools[mcp]
 # then run: pytvtools-mcp
 ```
 
-Registers all TV methods as MCP tools.
+Registers all TV methods as MCP tools. Runs **on the host** (not in Docker)
+and connects to Chrome at `localhost:9222` (Docker port mapping).
 
 ## TradingView JS API reference (CDP context)
 

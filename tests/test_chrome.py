@@ -139,33 +139,33 @@ class TestChrome:
         with pytest.raises(RuntimeError):
             await chrome.restart(headless=True)
 
-    @patch("pytvtools.chrome.httpx.AsyncClient")
+    @patch("pytvtools.chrome._get_httpx")
     @patch("pytvtools.chrome.wait_for_cdp", AsyncMock(return_value=True))
     @patch("pytvtools.chrome._find_chrome", return_value="/usr/bin/google-chrome")
     @patch("pytvtools.chrome.asyncio.create_subprocess_exec")
-    async def test_is_alive_checks_cdp_version(self, mock_subprocess, mock_find, mock_http_client):
+    async def test_is_alive_checks_cdp_version(self, mock_subprocess, mock_find, mock_get_httpx):
         mock_proc = AsyncMock()
         mock_proc.returncode = None
         mock_subprocess.return_value = mock_proc
 
+        mock_httpx = MagicMock()
         mock_instance = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_instance.get = AsyncMock(return_value=mock_response)
         mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
         mock_instance.__aexit__ = AsyncMock(return_value=None)
-        mock_http_client.return_value = mock_instance
+        mock_httpx.AsyncClient.return_value = mock_instance
+        mock_get_httpx.return_value = mock_httpx
 
         chrome = Chrome(binary="/usr/bin/google-chrome")
         await chrome.start()
         alive = await chrome.is_alive()
         assert alive is True
 
-    @patch("pytvtools.chrome.httpx.AsyncClient")
-    @patch("pytvtools.chrome.wait_for_cdp", AsyncMock(return_value=True))
     @patch("pytvtools.chrome._find_chrome", return_value="/usr/bin/google-chrome")
     @patch("pytvtools.chrome.asyncio.create_subprocess_exec", AsyncMock())
-    async def test_is_alive_returns_false_if_no_proc(self, mock_http_client, mock_find):
+    async def test_is_alive_returns_false_if_no_proc(self, mock_find):
         chrome = Chrome()
         alive = await chrome.is_alive()
         assert alive is False

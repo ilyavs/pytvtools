@@ -802,6 +802,55 @@ class TestReplay:
         assert result["success"] is False
 
 
+class TestPineSourceCaching:
+    """get_pine_source caching behavior."""
+
+    async def test_get_pine_source_returns_none_for_std(self, mock_cdp):
+        tv, cdp = mock_cdp
+        result = await tv.get_pine_source("STD;RSI")
+        assert result is None
+
+    async def test_get_pine_source_caches_pub_source(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            "//@version=5\nindicator(\"My Script\")\nplot(close)",
+        ]
+        result = await tv.get_pine_source("PUB;85")
+        assert result == "//@version=5\nindicator(\"My Script\")\nplot(close)"
+
+    async def test_get_pine_source_cache_hit(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            "pine_source_123",
+        ]
+        result = await tv.get_pine_source("PUB;42")
+        assert result == "pine_source_123"
+        assert tv._pine_source_cache["PUB;42"] == "pine_source_123"
+
+    async def test_get_pine_source_cache_returns_without_eval(self, mock_cdp):
+        tv, cdp = mock_cdp
+        tv._pine_source_cache["PUB;42"] = "cached_source"
+        cdp.evaluate.reset_mock()
+        result = await tv.get_pine_source("PUB;42")
+        assert result == "cached_source"
+        cdp.evaluate.assert_not_called()
+
+    async def test_get_pine_source_reads_from_chart_model(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            "pine_from_model",
+        ]
+        result = await tv.get_pine_source("PUB;42", entity_id="abc123")
+        assert result == "pine_from_model"
+        assert tv._pine_source_cache["PUB;42"] == "pine_from_model"
+
+    async def test_get_pine_source_caches_none_for_std(self, mock_cdp):
+        tv, cdp = mock_cdp
+        result = await tv.get_pine_source("STD;MACD")
+        assert result is None
+        assert tv._pine_source_cache["STD;MACD"] is None
+
+
 class TestErrorHandling:
     """Error states."""
 

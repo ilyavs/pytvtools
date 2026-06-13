@@ -29,10 +29,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import pyarrow as pa
-import pyarrow.parquet as pq
-
 from pytvtools.tv import TV
+
+
+_PYARROW: tuple | None = None
+
+def _get_pyarrow():
+    """Lazy import: pyarrow is only needed for parquet export (Collector)."""
+    global _PYARROW
+    if _PYARROW is None:
+        try:
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+            _PYARROW = (pa, pq)
+        except ImportError:
+            raise ImportError(
+                "pytvtools[full] required for parquet export. "
+                "Install: pip install pytvtools[full]"
+            )
+    return _PYARROW
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +239,7 @@ class Collector:
         if self._result is None:
             raise RuntimeError("Call run() before export_parquet()")
 
+        pa, pq = _get_pyarrow()
         path = Path(path)
         if path.suffix.lower() != ".parquet":
             path = path.with_suffix(".parquet")
@@ -286,6 +302,7 @@ class Collector:
 
 
 def _col_type(key: str) -> tuple[Any, type]:
+    pa, _ = _get_pyarrow()
     if key in ("symbol", "timeframe"):
         return pa.utf8(), str
     if key == "scan_ts":
@@ -325,7 +342,8 @@ def _safe(values: list[Any], py_type: type) -> list[Any]:
     return result
 
 
-def _records_to_table(records: list[dict[str, Any]]) -> pa.Table:
+def _records_to_table(records: list[dict[str, Any]]) -> Any:
+    pa, _ = _get_pyarrow()
     all_keys: list[str] = []
     seen: set[str] = set()
     for rec in records:
@@ -347,7 +365,8 @@ def _records_to_table(records: list[dict[str, Any]]) -> pa.Table:
     return pa.Table.from_arrays(arrays, schema=pa.schema(fields))
 
 
-def _empty_table() -> pa.Table:
+def _empty_table() -> Any:
+    pa, _ = _get_pyarrow()
     schema = pa.schema([
         pa.field("symbol", pa.utf8()),
         pa.field("timeframe", pa.utf8()),

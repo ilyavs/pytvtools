@@ -70,6 +70,7 @@ class TV:
         self._own_tab = False
         self._cdp: CdpConnection | None = None
         self._indicator_ids: set[str] = set()
+        self._pine_source_cache: dict[str, str] = {}
 
     async def __aenter__(self) -> TV:
         await self.connect()
@@ -894,6 +895,9 @@ class TV:
         (``STD;Name``) typically return ``None`` since their source is
         not publicly available.
 
+        Results are cached per session in ``_pine_source_cache`` keyed
+        by ``study_id``.
+
         Parameters
         ----------
         study_id : str
@@ -909,6 +913,9 @@ class TV:
         str or None
             The Pine Script source code, or ``None`` if not available.
         """
+        if study_id in self._pine_source_cache:
+            return self._pine_source_cache[study_id]
+
         # Strategy 1: read from chart model if already added
         if entity_id:
             source = await self._eval(f"""
@@ -922,6 +929,7 @@ class TV:
             }})()
             """)
             if source:
+                self._pine_source_cache[study_id] = source
                 return source
 
         # Strategy 2: fetch from TradingView's pine script API
@@ -941,8 +949,11 @@ class TV:
                 }}
             }})()
             """, await_promise=True)
+            if source:
+                self._pine_source_cache[study_id] = source
             return source
 
+        self._pine_source_cache[study_id] = None
         return None
 
     # ------------------------------------------------------------------

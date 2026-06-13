@@ -12,9 +12,19 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-import httpx
-
 from pytvtools.cdp import wait_for_cdp
+
+
+def _get_httpx():
+    """Lazy import: httpx is only needed for CDP health checks (Chrome class)."""
+    try:
+        import httpx
+        return httpx
+    except ImportError:
+        raise ImportError(
+            "pytvtools[full] required for CDP features. "
+            "Install: pip install pytvtools[full]"
+        )
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +150,7 @@ class Chrome:
     async def is_alive(self) -> bool:
         if not self._proc or self._proc.returncode is not None:
             return False
+        httpx = _get_httpx()
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(

@@ -4,11 +4,20 @@ Pure Python CDP library for TradingView in Chrome — no Node.js.
 
 Talk to TradingView's chart widget via Chrome DevTools Protocol. Read price data, add and read indicator values, run multi-symbol scans, inject Pine Script, and more.
 
-## Quick start
+## Install
 
-```
+```bash
+# Lite — TVData (direct WebSocket OHLCV) + Python indicators only, no Chrome/CDP needed
 pip install pytvtools
+
+# Full — adds CDP (TV class, screenshots, indicators, bar replay, etc.) + parquet export
+pip install pytvtools[full]
+
+# MCP server (host-side, connects to Chrome at localhost:9222)
+pip install pytvtools[mcp]
 ```
+
+## Quick start
 
 **Managed Chrome (start/stop from Python):**
 ```python
@@ -137,8 +146,9 @@ All examples operate on the **existing** chart tab — no tab creation.
 
 ## Tests
 
-```
-pip install pytvtools[dev]
+```bash
+# Unit tests need [dev] + [full] (for httpx/pyarrow in mocked CDP tests)
+pip install "pytvtools[full,dev]"
 ```
 
 ```bash
@@ -149,7 +159,7 @@ pytest tests/ -m "not integration" -v
 pytest tests/ -m integration -v --capture=no
 ```
 
-177 unit tests mock everything. 11 integration tests run every example against real TV.
+183 unit tests mock everything. 11 integration tests run every example against real TV.
 
 ## TradingView JS API reference
 
@@ -160,14 +170,15 @@ The full internal API map (public chart API vs widget internals, study ID format
 - Read plot values via `model.dataSourceForId(id)._data._items`
 - Study ID formats: `STD;Name` (pine) or `Name@tv-basicstudies` (java) for built-ins, `PUB;id` for community
 
-## MCP server (optional)
+## MCP server (optional, host-side)
 
 ```
 pip install pytvtools[mcp]
 pytvtools-mcp
 ```
 
-Exposes all TV methods as MCP tools.
+Exposes all TV methods as MCP tools. Runs **on the host** (not in Docker)
+and connects to Chrome at `localhost:9222` (Docker port mapping).
 
 ## Deployment
 
@@ -209,7 +220,7 @@ Your script → pytvtools (Python)
                                    → tradingview.com/chart
 ```
 
-**Dependencies:** `httpx` (HTTP), `websockets` (CDP), `mcp` (optional).
+**Dependencies:** `websockets` (core) — `httpx` + `pyarrow` for `[full]`, `mcp` for `[mcp]`.
 
 ## Why raw CDP
 
