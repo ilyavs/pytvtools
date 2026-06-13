@@ -885,6 +885,66 @@ class TV:
         """)
         return {"errors": errors}
 
+    async def get_pine_source(
+        self, study_id: str, entity_id: str | None = None
+    ) -> str | None:
+        """Fetch the Pine Script source code of any public indicator.
+
+        Works for community scripts (``PUB;id``).  Built-in studies
+        (``STD;Name``) typically return ``None`` since their source is
+        not publicly available.
+
+        Parameters
+        ----------
+        study_id : str
+            Study ID in ``PUB;id`` format (e.g. ``"PUB;85"``) or
+            ``STD;Name`` format.
+        entity_id : str | None
+            If the indicator is already on the chart, pass its entity ID
+            to read the source from the chart model directly (avoids the
+            HTTP request).
+
+        Returns
+        -------
+        str or None
+            The Pine Script source code, or ``None`` if not available.
+        """
+        # Strategy 1: read from chart model if already added
+        if entity_id:
+            source = await self._eval(f"""
+            (function() {{
+                var ds = {_CHART_API}.chartWidget().model()
+                    .dataSourceForId({_js_str(entity_id)});
+                if (ds && ds._study && ds._study._script) {{
+                    return ds._study._script.source || null;
+                }}
+                return null;
+            }})()
+            """)
+            if source:
+                return source
+
+        # Strategy 2: fetch from TradingView's pine script API
+        if study_id.startswith("PUB;"):
+            pub_id = study_id.split(";", 1)[1]
+            source = await self._eval(f"""
+            (async function() {{
+                try {{
+                    var resp = await fetch(
+                        'https://www.tradingview.com/pine_script/public/'
+                        + {_js_str(pub_id)}
+                    );
+                    var data = await resp.json();
+                    return data.source || null;
+                }} catch(e) {{
+                    return null;
+                }}
+            }})()
+            """, await_promise=True)
+            return source
+
+        return None
+
     # ------------------------------------------------------------------
     # Drawings (Pine lines/labels/tables/boxes)
     # ------------------------------------------------------------------

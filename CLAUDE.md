@@ -70,6 +70,7 @@ async with TVData() as d:
 - `batch(symbols, timeframes, action, max_bars=500)` — multi-symbol scan (CDP-based, handles rate limits)
 - `pine_set_source(source)` — inject Pine code
 - `pine_compile()` — compile and read errors
+- `get_pine_source(study_id, entity_id=None)` — fetch Pine Script source of any public indicator
 - `replay_start(date=None)` — enter bar-replay mode (optionally at a specific date)
 - `replay_stop()` — exit replay mode, return to realtime
 - `replay_status()` → `{is_replay_started, current_date, ...}`
