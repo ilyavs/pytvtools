@@ -692,6 +692,115 @@ class TestUI:
             await tv._ui_click("non-existent")
 
 
+class TestReplay:
+    """Bar replay mode control."""
+
+    async def test_replay_start(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            True,                         # isReplayAvailable
+            None,                         # showReplayToolbar
+            None,                         # selectFirstAvailableDate
+            True,                         # isReplayStarted
+            "2020-01-01",                 # currentDate
+        ]
+        result = await tv.replay_start()
+        assert result["success"] is True
+        assert result["replay_started"] is True
+        assert result["current_date"] == "2020-01-01"
+
+    async def test_replay_start_specific_date(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            True,
+            None,
+            None,
+            True,
+            "2024-06-01",
+        ]
+        result = await tv.replay_start(date="2024-06-01")
+        assert result["success"] is True
+        assert result["date"] == "2024-06-01"
+
+    async def test_replay_start_not_available(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [False]
+        result = await tv.replay_start()
+        assert result["success"] is False
+        assert "error" in result
+
+    async def test_replay_stop(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            True,    # isReplayStarted
+            None,    # stopReplay
+            None,    # hideReplayToolbar
+        ]
+        result = await tv.replay_stop()
+        assert result["action"] == "replay_stopped"
+
+    async def test_replay_stop_already_stopped(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            False,   # isReplayStarted
+            None,    # hideReplayToolbar
+        ]
+        result = await tv.replay_stop()
+        assert result["action"] == "already_stopped"
+
+    async def test_replay_status(self, mock_cdp):
+        tv, cdp = mock_cdp
+        fake_status = {
+            "is_replay_available": True,
+            "is_replay_started": True,
+            "is_autoplay_started": False,
+            "replay_mode": "bars",
+            "current_date": "2024-01-15",
+            "autoplay_delay": 0,
+        }
+        cdp.evaluate.side_effect = [fake_status]
+        result = await tv.replay_status()
+        assert result["is_replay_started"] is True
+        assert result["replay_mode"] == "bars"
+
+    async def test_replay_step(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            True,             # isReplayStarted
+            None,             # doStep
+            "2024-01-16",     # currentDate
+        ]
+        result = await tv.replay_step()
+        assert result["success"] is True
+        assert result["current_date"] == "2024-01-16"
+
+    async def test_replay_step_not_started(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [False]
+        result = await tv.replay_step()
+        assert result["success"] is False
+        assert "error" in result
+
+    async def test_replay_autoplay(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            True,    # isReplayStarted
+            None,    # changeAutoplayDelay(2000)
+            None,    # toggleAutoplay
+            True,    # isAutoplayStarted
+            2000,    # autoplayDelay
+        ]
+        result = await tv.replay_autoplay(speed=2000)
+        assert result["success"] is True
+        assert result["autoplay_active"] is True
+
+    async def test_replay_autoplay_not_started(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [False]
+        result = await tv.replay_autoplay()
+        assert result["success"] is False
+
+
 class TestErrorHandling:
     """Error states."""
 

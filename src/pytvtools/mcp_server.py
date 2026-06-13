@@ -253,6 +253,41 @@ async def list_tools() -> list[Tool]:
                 "required": ["name"],
             },
         ),
+        Tool(
+            name="replay_start",
+            description="Start bar replay mode, optionally at a specific date.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "date": {"type": "string", "description": "ISO date (2024-01-15) or omit for first available"},
+                },
+            },
+        ),
+        Tool(
+            name="replay_stop",
+            description="Stop replay and return to realtime.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="replay_status",
+            description="Get current replay mode state.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="replay_step",
+            description="Advance one bar in replay mode.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="replay_autoplay",
+            description="Toggle autoplay in replay mode, optionally set speed.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "speed": {"type": "number", "description": "Autoplay delay in ms (lower=faster). Omit to just toggle."},
+                },
+            },
+        ),
     ]
 
 
@@ -346,6 +381,16 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     name=arguments["name"],
                 )
                 result = {"ok": True}
+            elif name == "replay_start":
+                result = await tv.replay_start(date=arguments.get("date"))
+            elif name == "replay_stop":
+                result = await tv.replay_stop()
+            elif name == "replay_status":
+                result = await tv.replay_status()
+            elif name == "replay_step":
+                result = await tv.replay_step()
+            elif name == "replay_autoplay":
+                result = await tv.replay_autoplay(speed=arguments.get("speed", 0))
             else:
                 raise ValueError(f"Unknown tool: {name}")
 
