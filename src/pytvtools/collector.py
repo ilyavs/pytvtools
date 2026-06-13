@@ -367,7 +367,7 @@ class TVDataCollector:
         )
 
         merged: dict[tuple[str, str], dict[str, Any]] = {}
-        failed_symbols: set[str] = set()
+        per_sym_failures: dict[str, set[str]] = {sym: set() for sym in cfg.symbols}
 
         for tf in cfg.timeframes:
             logger.info("TVDataCollector: timeframe=%s ...", tf)
@@ -387,15 +387,18 @@ class TVDataCollector:
                             **{f"ohlcv_{k}": v for k, v in val.items()},
                         }
                     else:
-                        failed_symbols.add(sym)
+                        per_sym_failures[sym].add(tf)
                         logger.warning("TVDataCollector: %s / %s failed: %s", sym, tf, val.get("error", "unknown"))
             except Exception as e:
                 logger.error("TVDataCollector: timeframe=%s error: %s", tf, e)
                 for sym in cfg.symbols:
-                    failed_symbols.add(sym)
+                    per_sym_failures[sym].add(tf)
 
+        symbols_failed = sorted(
+            sym for sym in cfg.symbols
+            if len(per_sym_failures[sym]) == len(cfg.timeframes)
+        )
         records = list(merged.values())
-        symbols_failed = sorted(failed_symbols)
         end_ts = datetime.now(timezone.utc)
 
         result = CollectResult(

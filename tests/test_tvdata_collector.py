@@ -89,6 +89,7 @@ class TestTVDataCollectorRun:
 
         assert len(result.records) == 1
         assert result.records[0]["symbol"] == "SP:SPX"
+        assert result.symbols_failed == ["COINBASE:BTCUSD"]  # only 1 TF, so all TFs failed
 
     @patch("pytvtools.collector.TVData")
     async def test_all_failures(self, mock_tvdata_cls):
@@ -101,6 +102,26 @@ class TestTVDataCollectorRun:
 
         assert len(result.records) == 0
         assert result.symbols_failed == ["A"]
+
+    @patch("pytvtools.collector.TVData")
+    async def test_partial_fail_multi_tf(self, mock_tvdata_cls):
+        """Symbol with one failed TF and one successful TF is not failed."""
+        mock_instance = AsyncMock()
+
+        async def multi_side(symbols, interval, bars_count, *, summary, max_concurrent):
+            if interval == "1D":
+                return {"A": SAMPLE_DATA["SP:SPX"], "B": {"error": "fail"}}
+            else:
+                return {"A": SAMPLE_DATA["SP:SPX"], "B": SAMPLE_DATA["COINBASE:BTCUSD"]}
+
+        mock_instance.get_ohlcv_multi = AsyncMock(side_effect=multi_side)
+        mock_tvdata_cls.return_value.__aenter__.return_value = mock_instance
+
+        collector = TVDataCollector(symbols=["A", "B"], timeframes=["1D", "60"], bars_count=100)
+        result = await collector.run()
+
+        assert len(result.records) == 3  # A(1D,60) + B(60)
+        assert result.symbols_failed == []  # B succeeded on 60
 
     @patch("pytvtools.collector.TVData")
     async def test_scan_ts(self, mock_tvdata_cls):

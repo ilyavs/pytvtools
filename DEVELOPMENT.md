@@ -30,7 +30,7 @@ docker exec -w /app docker-pytvtools-1 python -m pytest tests/ -m integration -v
 # Run an example
 docker exec -w /app docker-pytvtools-1 python examples/basic.py
 
-# Unit test count: 186 (all mock, no Chrome needed)
+# Unit test count: 203 (all mock, no Chrome needed)
 # Integration test count: 11 (requires live Chrome + TV tab)
 ```
 
@@ -46,7 +46,7 @@ Host edits → src/pytvtools/*.py → mounted to /app → runs in container
 | `src/pytvtools/tvdata.py` | `TVData` — direct WebSocket OHLCV fetcher (no CDP) |
 | `src/pytvtools/cdp.py` | `CdpConnection` — WebSocket transport, `Runtime.evaluate` |
 | `src/pytvtools/chrome.py` | `Chrome` — launch/stop/restart headless Chrome |
-| `src/pytvtools/collector.py` | `Collector` — multi-symbol batch data collection + parquet/JSON export |
+| `src/pytvtools/collector.py` | `Collector` — multi-symbol batch (CDP-based, studies too); `TVDataCollector` — OHLCV-only batch (no Chrome, wraps `get_ohlcv_multi`) |
 | `src/pytvtools/mcp_server.py` | MCP server wrapping all TV methods |
 | `src/pytvtools/__init__.py` | Public exports |
 | `src/pytvtools/watchlists.py` | `Watchlist` — frozen dataclass + predefined watchlists |
@@ -58,7 +58,8 @@ Host edits → src/pytvtools/*.py → mounted to /app → runs in container
 | `tests/test_chrome.py` | Unit tests for Chrome lifecycle |
 | `tests/test_indicators.py` | Unit tests for Python indicators |
 | `tests/test_indicator_parity.py` | Unit tests for comparison utility |
-| `tests/test_collector.py` | Unit tests for Collector |
+| `tests/test_collector.py` | Unit tests for Collector (CDP-based) |
+| `tests/test_tvdata_collector.py` | Unit tests for TVDataCollector (no CDP) |
 | `tests/test_watchlists.py` | Unit tests for Watchlist |
 | `tests/test_integration.py` | Runs all examples as integration tests |
 | `examples/` | Runnable examples (also integration test targets) |
