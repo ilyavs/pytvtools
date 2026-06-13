@@ -24,6 +24,12 @@ import websockets
 
 logger = logging.getLogger(__name__)
 
+
+async def _ws_connect(url: str, **kwargs: Any) -> Any:
+    """websockets >= 16: connect() returns an async context manager, not awaitable."""
+    return await websockets.connect(url, **kwargs).__aenter__()
+
+
 _WS_URL = "wss://data.tradingview.com/socket.io/websocket?from=chart%2F"
 _AUTH_TOKEN = "unauthorized_user_token"
 _TIMEOUT = 30
@@ -57,7 +63,7 @@ class TVData:
         self._ws: websockets.WebSocketClientProtocol | None = None
 
     async def __aenter__(self) -> TVData:
-        self._ws = await websockets.connect(
+        self._ws = await _ws_connect(
             _WS_URL,
             additional_headers={
                 "User-Agent": (

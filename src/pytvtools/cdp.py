@@ -24,10 +24,17 @@ CDP_PORT = int(os.environ.get("TV_CDP_INTERNAL_PORT") or os.environ.get("TV_CDP_
 CDP_HOST = "localhost"
 
 
+
+
 class CdpError(Exception):
     def __init__(self, msg: str, details: dict | None = None):
         self.details = details or {}
         super().__init__(msg)
+
+
+async def _ws_connect(url: str, **kwargs: Any) -> Any:
+    """websockets >= 16: connect() returns an async context manager, not awaitable."""
+    return await websockets.connect(url, **kwargs).__aenter__()
 
 
 class CdpConnection:
@@ -39,8 +46,7 @@ class CdpConnection:
         self._msg_id = 0
 
     async def connect(self) -> None:
-        self._ws = await websockets.connect(self._ws_url)
-        # Enable the Runtime domain
+        self._ws = await _ws_connect(self._ws_url)
         await self._send("Runtime.enable")
 
     async def evaluate(
@@ -159,3 +165,67 @@ def make_ws_url(target: dict[str, Any]) -> str:
         return f"ws://{ws_param}"
     # Last resort: construct from host + page ID
     return f"ws://{CDP_HOST}:{CDP_PORT}/devtools/page/{target['id']}"
+
+
+async def get_browser_ws_url(
+    host: str = CDP_HOST, port: int = CDP_PORT
+) -> str:
+    """Get the browser-level WebSocket URL from /json/version."""
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(f"http://{host}:{port}/json/version", timeout=10)
+        resp.raise_for_status()
+        return resp.json()["webSocketDebuggerUrl"]
+
+
+async def close_tab(
+    target_id: str,
+    host: str = CDP_HOST,
+    port: int = CDP_PORT,
+) -> None:
+    """Close a Chrome tab by target ID via the browser WebSocket."""
+    browser_ws_url = await get_browser_ws_url(host, port)
+    ws = await _ws_connect(browser_ws_url)
+    try:
+        msg = json.dumps({"id": 1, "method": "Target.closeTarget", "params": {"targetId": target_id}})
+        await ws.send(msg)
+        while True:
+            raw = await ws.recv()
+            resp = json.loads(raw)
+            if resp.get("id") == 1:
+                break
+    finally:
+        await ws.close()
+
+
+async def create_new_tab(
+    url: str = "about:blank",
+    host: str = CDP_HOST,
+    port: int = CDP_PORT,
+) -> dict[str, Any]:
+    """Create a new tab in Chrome via the browser WebSocket and return its target info.
+
+    New tabs are reliably responsive to CDP commands, unlike existing
+    tabs which may be in a frozen/unresponsive state.
+    """
+    browser_ws_url = await get_browser_ws_url(host, port)
+    ws = await _ws_connect(browser_ws_url)
+    try:
+        msg = json.dumps({"id": 1, "method": "Target.createTarget", "params": {"url": url}})
+        await ws.send(msg)
+        while True:
+            raw = await ws.recv()
+            resp = json.loads(raw)
+            if resp.get("id") == 1:
+                target_id = resp["result"]["targetId"]
+                break
+    finally:
+        await ws.close()
+
+    # Build target info from the new tab
+    page_ws_url = f"ws://{host}:{port}/devtools/page/{target_id}"
+    return {
+        "id": target_id,
+        "type": "page",
+        "url": url,
+        "webSocketDebuggerUrl": page_ws_url,
+    }

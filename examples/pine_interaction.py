@@ -1,12 +1,6 @@
-"""
-Pine Script interaction: open editor, set source, compile, read drawings.
-"""
+"""Pine Script: open editor, inject source, compile, and read drawings."""
 import asyncio
 import logging
-import os
-import sys
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from pytvtools import TV, wait_for_cdp
 
@@ -26,19 +20,17 @@ if barstate.islast
 async def main():
     if not await wait_for_cdp(timeout=5):
         log.error("CDP not reachable.")
-        sys.exit(1)
+        return
 
-    async with TV(port=9222) as tv:
+    async with TV() as tv:
         state = await tv.get_state()
         log.info(f"Chart: {state}")
 
-        # Clear existing indicators if at capacity
         if await tv.get_indicator_count() >= 2:
             log.info("Chart at capacity — clearing indicators...")
             await tv.remove_all_indicators()
             await asyncio.sleep(0.5)
 
-        # Open Pine Editor via button click
         log.info("Opening Pine Editor...")
         try:
             await tv._eval("""
@@ -53,7 +45,6 @@ async def main():
             opened = False
         if not opened:
             log.warning("Pine Editor button not found — skipping Pine operations")
-            log.info("Done (skipped).")
             return
         await asyncio.sleep(1)
 
@@ -63,7 +54,6 @@ async def main():
 
         result = await tv.pine_compile()
         log.info(f"Compile result: {result}")
-
         await asyncio.sleep(2)
 
         studies = await tv.get_study_values()

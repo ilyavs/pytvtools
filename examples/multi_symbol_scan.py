@@ -1,12 +1,6 @@
-"""
-Multi-symbol scan example: iterate watchlist, read indicators per symbol.
-"""
+"""Scan multiple symbols and timeframes for indicator values using batch()."""
 import asyncio
 import logging
-import os
-import sys
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from pytvtools import TV, wait_for_cdp
 
@@ -20,7 +14,7 @@ TIMEFRAMES = ["D", "60"]
 async def main():
     await wait_for_cdp(timeout=10)
 
-    async with TV(port=9222) as tv:
+    async with TV() as tv:
         results = await tv.batch(WATCHLIST, TIMEFRAMES, action="studies")
         for symbol, tfs in results.items():
             for tf, studies in tfs.items():

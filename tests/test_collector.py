@@ -97,7 +97,7 @@ class TestCollectorRun:
             ["NASDAQ:AAPL", "NASDAQ:MSFT"],
             ["1D", "60"],
             "ohlcv",
-            max_bars=500,
+            max_bars=None,
         )
 
     async def test_actions_merge(self, mock_tv):
@@ -116,7 +116,7 @@ class TestCollectorRun:
             ["NASDAQ:AAPL", "NASDAQ:MSFT"],
             ["1D", "60"],
             "all",
-            max_bars=500,
+            max_bars=None,
         )
 
         msft_1d = next(r for r in result.records if r["symbol"] == "NASDAQ:MSFT" and r["timeframe"] == "1D")

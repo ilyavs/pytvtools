@@ -1,16 +1,8 @@
-"""
-Search for indicators and add by study_id — works for both built-in and community scripts.
-
-Flow: search by keyword → pick from results → add by study_id.
-"""
+"""Search for indicators by keyword and add by study_id — works for built-in and community scripts."""
 import asyncio
 import logging
-import os
-import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from pytvtools import TV, TooManyIndicatorsError, wait_for_cdp
+from pytvtools import TV, wait_for_cdp
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger(__name__)
@@ -27,47 +19,32 @@ async def _ensure_slot(tv: TV) -> None:
 async def main():
     if not await wait_for_cdp(timeout=5):
         log.error("CDP not reachable.")
-        sys.exit(1)
+        return
 
-    async with TV(port=9222) as tv:
+    async with TV() as tv:
         state = await tv.get_state()
         log.info(f"Chart: {state}")
 
         await _ensure_slot(tv)
 
-        # ------------------------------------------------------------------
-        # 1. Built-in indicator: search → add by study_id from results
-        # ------------------------------------------------------------------
+        # Built-in indicator: search -> add by study_id
         log.info("\n=== Built-in: search 'RSI' ===")
         results = await tv.search_indicators("RSI")
         for r in results[:3]:
-            pub = r.get("publisher", "")
-            log.info(f"  {r['name']:40s} {r['study_id']:25s} {pub}")
-
+            log.info(f"  {r['name']:40s} {r['study_id']:25s} {r.get('publisher', '')}")
         log.info(f"  Adding {results[0]['study_id']}...")
         eid = await tv.add_indicator(results[0]["study_id"])
         log.info(f"  -> entity ID: {eid}")
         await asyncio.sleep(1.5)
 
-        # ------------------------------------------------------------------
-        # 2. Community script: search → add by PUB;id
-        # ------------------------------------------------------------------
-        log.info("\n=== Community: search 'DSS Bressert' ===")
-        results = await tv.search_indicators("DSS Bressert")
-        for r in results[:3]:
-            pub = r.get("publisher", "")
-            log.info(f"  {r['name']:55s} {r['study_id']:25s} {pub}")
-
+        # Community script: search -> add by PUB;id
         await _ensure_slot(tv)
-
-        log.info("  Adding PUB;85...")
+        log.info("\n=== Community: add PUB;85 (DSS Bressert) ===")
         eid = await tv.add_indicator("PUB;85")
         log.info(f"  -> entity ID: {eid}")
         await asyncio.sleep(2)
 
-        # ------------------------------------------------------------------
-        # 3. Read values
-        # ------------------------------------------------------------------
+        # Read values
         log.info("\n=== Indicator values ===")
         vals = await tv.get_study_values()
         for name, data in vals.items():
@@ -78,10 +55,6 @@ async def main():
             else:
                 log.info(f"  {name}: {data}")
 
-        # ------------------------------------------------------------------
-        # 4. Clean up
-        # ------------------------------------------------------------------
-        log.info("\n=== Clean up ===")
         await tv.remove_all_indicators()
         log.info("  Removed all indicators.")
 

@@ -14,8 +14,7 @@ Pure Python CDP library for TradingView in Chrome. No Node.js, no submodules.
 | `src/pytvtools/tv.py` | `TV` — high-level TradingView client (CDP-based) |
 | `src/pytvtools/tvdata.py` | `TVData` — direct WebSocket OHLCV fetcher (no CDP, fast) |
 | `src/pytvtools/collector.py` | `Collector` — multi-symbol batch data collection + parquet/JSON export |
-| `src/pytvtools/collector.py` | `Collector` — multi-symbol batch data collection + parquet/JSON export |
-| `src/pytvtools/watchlists.py` | `Watchlist` — frozen dataclass + predefined watchlists (SPDR sectors, industries) |
+| `src/pytvtools/watchlists.py` | `Watchlist` — frozen dataclass + predefined watchlists |
 | `src/pytvtools/indicators.py` | Pure-Python SMA, EMA, RSI, MACD implementations |
 | `src/pytvtools/indicator_parity.py` | `compare_indicator()` — verify Python vs TV indicator outputs match |
 | `src/pytvtools/__init__.py` | Re-exports |
@@ -47,9 +46,9 @@ async with TVData() as d:
 ## All TV methods
 
 - `get_state()` → `{symbol, timeframe, chartType}`
-- `set_symbol(symbol)`
+- `set_symbol(symbol, timeout=10, wait_data=True)` — `wait_data=False` skips chart-ready check
 - `set_timeframe(tf)` — "D", "60", "15", etc.
-- `set_chart_type(t)` — Candles=1, Line=2, etc.
+- `set_chart_type(t)` — Candles=1, Line=2, Area=3
 - `scroll_to_date(date)` — "2025-01-15" or unix ts
 - `get_visible_range()` → `{from, to}`
 - `get_ohlcv(count=500, summary=False)` → bars or stats
@@ -68,12 +67,9 @@ async with TVData() as d:
 - `capture_screenshot()` → base64 PNG
 - `get_pine_lines(study_filter=None)` → price levels
 - `get_pine_labels(study_filter=None, max_labels=50)` → text labels
-- `get_pine_boxes(study_filter=None)` → price zones
-- `get_pine_tables(study_filter=None)` → formatted text rows
 - `batch(symbols, timeframes, action, max_bars=500)` — multi-symbol scan (CDP-based, handles rate limits)
 - `pine_set_source(source)` — inject Pine code
 - `pine_compile()` — compile and read errors
-- `set_symbol(symbol, timeout=10, wait_data=True)` — `wait_data=False` skips chart-ready check
 - `replay_start(date=None)` — enter bar-replay mode (optionally at a specific date)
 - `replay_stop()` — exit replay mode, return to realtime
 - `replay_status()` → `{is_replay_started, current_date, ...}`
@@ -184,12 +180,12 @@ from pytvtools import Collector, CollectorConfig
 config = CollectorConfig(
     symbols=["NASDAQ:AAPL", "BINANCE:BTCUSDT"],
     timeframes=["1D", "60"],
-    actions=["ohlcv", "studies"],  # or ["ohlcv"] for OHLCV-only
-    max_bars=1000,                  # optional, passed to get_ohlcv(count=...)
+    actions=["ohlcv", "studies"],
+    max_bars=1000,
 )
 collector = Collector(config)
 async with TV() as tv:
-    result = await collector.run(tv)          # returns CollectResult
+    result = await collector.run(tv)
 path = collector.export_parquet("data.parquet")
 # JSON (no extra deps, always available)
 path = collector.export_json("data.json")

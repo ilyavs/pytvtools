@@ -19,10 +19,11 @@ def mock_cdp():
     cdp.evaluate = AsyncMock()
     cdp.connect = AsyncMock()
     cdp.close = AsyncMock()
-    with patch("pytvtools.tv.find_tv_target", AsyncMock(return_value={"id": "x", "webSocketDebuggerUrl": "ws://localhost:9222/x"})):
+    with patch("pytvtools.tv.create_new_tab", AsyncMock(return_value={"id": "x", "webSocketDebuggerUrl": "ws://localhost:9222/x"})):
         with patch("pytvtools.tv.CdpConnection", return_value=cdp):
             tv = TV()
             tv._cdp = cdp  # already connected
+            tv._target = {"id": "x", "webSocketDebuggerUrl": "ws://localhost:9222/x"}  # skip create_new_tab
             yield tv, cdp
 
 
@@ -34,10 +35,10 @@ class TestConnection:
         await tv.connect()
         cdp.connect.assert_awaited_once()
 
-    async def test_connect_no_target(self):
-        with patch("pytvtools.tv.find_tv_target", AsyncMock(return_value=None)):
+    async def test_connect_create_tab_fails(self):
+        with patch("pytvtools.tv.create_new_tab", AsyncMock(side_effect=Exception("Chrome not running"))):
             tv = TV()
-            with pytest.raises(RuntimeError, match="No TradingView chart tab found"):
+            with pytest.raises(Exception, match="Chrome not running"):
                 await tv.connect()
 
     async def test_disconnect(self, mock_cdp):
@@ -58,8 +59,8 @@ class TestConnection:
         cdp.close.assert_awaited_once()
 
     async def test_context_manager_no_target(self):
-        with patch("pytvtools.tv.find_tv_target", AsyncMock(return_value=None)):
-            with pytest.raises(RuntimeError):
+        with patch("pytvtools.tv.create_new_tab", AsyncMock(side_effect=Exception("fail"))):
+            with pytest.raises(Exception, match="fail"):
                 async with TV():
                     pass
 

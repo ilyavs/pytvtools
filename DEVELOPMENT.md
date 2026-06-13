@@ -24,14 +24,14 @@ All commands run **in the container**, never on the host:
 
 ```bash
 # Tests
-docker exec docker-pytvtools-1 python -m pytest tests/ -m "not integration" -v
-docker exec docker-pytvtools-1 python -m pytest tests/ -m integration -v --capture=no
+docker exec -w /app docker-pytvtools-1 python -m pytest tests/ -m "not integration" -v
+docker exec -w /app docker-pytvtools-1 python -m pytest tests/ -m integration -v --capture=no
 
 # Run an example
-docker exec docker-pytvtools-1 python examples/basic.py
+docker exec -w /app docker-pytvtools-1 python examples/basic.py
 
 # Unit test count: 177 (all mock, no Chrome needed)
-# Integration test count: 8 (requires live Chrome + TV tab)
+# Integration test count: 11 (requires live Chrome + TV tab)
 ```
 
 ## Architecture
@@ -46,18 +46,21 @@ Host edits → src/pytvtools/*.py → mounted to /app → runs in container
 | `src/pytvtools/tvdata.py` | `TVData` — direct WebSocket OHLCV fetcher (no CDP) |
 | `src/pytvtools/cdp.py` | `CdpConnection` — WebSocket transport, `Runtime.evaluate` |
 | `src/pytvtools/chrome.py` | `Chrome` — launch/stop/restart headless Chrome |
-| `src/pytvtools/collector.py` | `Collector` — multi-symbol batch data collection + parquet export |
+| `src/pytvtools/collector.py` | `Collector` — multi-symbol batch data collection + parquet/JSON export |
 | `src/pytvtools/mcp_server.py` | MCP server wrapping all TV methods |
 | `src/pytvtools/__init__.py` | Public exports |
 | `src/pytvtools/watchlists.py` | `Watchlist` — frozen dataclass + predefined watchlists |
+| `src/pytvtools/indicators.py` | Pure-Python SMA, EMA, RSI, MACD implementations |
+| `src/pytvtools/indicator_parity.py` | `compare_indicator()` — Python vs TV indicator comparison |
 | `tests/test_tv.py` | Unit tests for TV methods |
 | `tests/test_tvdata.py` | Unit tests for TVData direct WS fetcher |
 | `tests/test_cdp.py` | Unit tests for CDP transport |
 | `tests/test_chrome.py` | Unit tests for Chrome lifecycle |
-| `src/pytvtools/indicators.py` | Pure-Python technical indicator implementations |
-| `src/pytvtools/indicator_parity.py` | Python vs TradingView indicator comparison utility |
 | `tests/test_indicators.py` | Unit tests for Python indicators |
 | `tests/test_indicator_parity.py` | Unit tests for comparison utility |
+| `tests/test_collector.py` | Unit tests for Collector |
+| `tests/test_watchlists.py` | Unit tests for Watchlist |
+| `tests/test_integration.py` | Runs all examples as integration tests |
 | `examples/` | Runnable examples (also integration test targets) |
 
 ## Implementation rules
@@ -66,11 +69,11 @@ Host edits → src/pytvtools/*.py → mounted to /app → runs in container
    tab. No direct TradingView REST API calls, no HTTP endpoints.
 2. **Use the public chart API** — `window.TradingViewApi.chart()` — to avoid the
    "temporary glitch" overlay that appears when using the internal widget getter.
- 3. **Study ID formats:**
-    - Built-in (pine): `STD;Name` (e.g. `STD;RSI`, `STD;SMA`) — use `type: "pine"`
-    - Built-in (java): `Name@tv-basicstudies` (e.g. `Volume@tv-basicstudies`) — use `type: "java"`
-    - Community: `PUB;id` (e.g. `PUB;85`) — use `type: "pine"`
-    - `search_indicators` returns the correct `study_id` for use with `add_indicator`
+3. **Study ID formats:**
+   - Built-in (pine): `STD;Name` (e.g. `STD;RSI`, `STD;SMA`) — use `type: "pine"`
+   - Built-in (java): `Name@tv-basicstudies` (e.g. `Volume@tv-basicstudies`) — use `type: "java"`
+   - Community: `PUB;id` (e.g. `PUB;85`) — use `type: "pine"`
+   - `search_indicators` returns the correct `study_id` for use with `add_indicator`
 4. **JS patterns:**
    - `self._eval(js_string)` — runs JS, returns result
    - `self._eval(js_string, await_promise=True)` — for async/Promise-returning JS

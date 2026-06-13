@@ -12,6 +12,7 @@ import websockets
 from pytvtools.cdp import (
     CdpConnection,
     CdpError,
+    _ws_connect,
     find_tv_target,
     get_targets,
     make_ws_url,
@@ -26,7 +27,7 @@ class TestCdpConnection:
         mock_ws.recv.side_effect = [
             json.dumps({"id": 1, "result": {}}),
         ]
-        with patch("websockets.connect", AsyncMock(return_value=mock_ws)):
+        with patch("pytvtools.cdp._ws_connect", AsyncMock(return_value=mock_ws)):
             cdp = CdpConnection("ws://localhost:9222/devtools/page/abc")
             await cdp.connect()
         assert mock_ws.send.call_count == 1
@@ -38,7 +39,7 @@ class TestCdpConnection:
             json.dumps({"id": 1, "result": {}}),                              # Runtime.enable
             json.dumps({"id": 2, "result": {"result": {"value": 42}}}),       # evaluate
         ]
-        with patch("websockets.connect", AsyncMock(return_value=mock_ws)):
+        with patch("pytvtools.cdp._ws_connect", AsyncMock(return_value=mock_ws)):
             cdp = CdpConnection("ws://localhost:9222/devtools/page/abc")
             await cdp.connect()
             val = await cdp.evaluate("1 + 1")
@@ -55,7 +56,7 @@ class TestCdpConnection:
             json.dumps({"id": 1, "result": {}}),  # Runtime.enable
             json.dumps({"id": 2, "result": {"result": {"value": "done"}}}),
         ]
-        with patch("websockets.connect", AsyncMock(return_value=mock_ws)):
+        with patch("pytvtools.cdp._ws_connect", AsyncMock(return_value=mock_ws)):
             cdp = CdpConnection("ws://localhost:9222/devtools/page/abc")
             await cdp.connect()
             val = await cdp.evaluate("Promise.resolve('done')", await_promise=True)
@@ -77,7 +78,7 @@ class TestCdpConnection:
                 },
             }),
         ]
-        with patch("websockets.connect", AsyncMock(return_value=mock_ws)):
+        with patch("pytvtools.cdp._ws_connect", AsyncMock(return_value=mock_ws)):
             cdp = CdpConnection("ws://localhost:9222/devtools/page/abc")
             await cdp.connect()
             with pytest.raises(CdpError, match="ReferenceError"):
@@ -90,7 +91,7 @@ class TestCdpConnection:
             json.dumps({"method": "Runtime.consoleAPICalled", "params": {}}),
             json.dumps({"id": 2, "result": {"result": {"value": "ok"}}}),
         ]
-        with patch("websockets.connect", AsyncMock(return_value=mock_ws)):
+        with patch("pytvtools.cdp._ws_connect", AsyncMock(return_value=mock_ws)):
             cdp = CdpConnection("ws://localhost:9222/devtools/page/abc")
             await cdp.connect()
             val = await cdp.evaluate("'ok'")
@@ -101,7 +102,7 @@ class TestCdpConnection:
             json.dumps({"id": 1, "result": {}}),
             json.dumps({"id": 2, "error": {"code": -32000, "message": "Cannot find target"}}),
         ]
-        with patch("websockets.connect", AsyncMock(return_value=mock_ws)):
+        with patch("pytvtools.cdp._ws_connect", AsyncMock(return_value=mock_ws)):
             cdp = CdpConnection("ws://localhost:9222/devtools/page/abc")
             await cdp.connect()
             with pytest.raises(CdpError, match="Cannot find target"):
@@ -109,7 +110,7 @@ class TestCdpConnection:
 
     async def test_close(self, mock_ws):
         mock_ws.recv.side_effect = [json.dumps({"id": 1, "result": {}})]
-        with patch("websockets.connect", AsyncMock(return_value=mock_ws)):
+        with patch("pytvtools.cdp._ws_connect", AsyncMock(return_value=mock_ws)):
             cdp = CdpConnection("ws://localhost:9222/devtools/page/abc")
             await cdp.connect()
             await cdp.close()
@@ -120,7 +121,7 @@ class TestCdpConnection:
             json.dumps({"id": 1, "result": {}}),
             json.dumps({"id": 2, "result": {"result": {"objectId": "abc123"}}}),
         ]
-        with patch("websockets.connect", AsyncMock(return_value=mock_ws)):
+        with patch("pytvtools.cdp._ws_connect", AsyncMock(return_value=mock_ws)):
             cdp = CdpConnection("ws://localhost:9222/devtools/page/abc")
             await cdp.connect()
             obj = await cdp.evaluate("document", return_by_value=False)
@@ -132,7 +133,7 @@ class TestCdpConnection:
             json.dumps({"id": 2, "result": {}}),
             json.dumps({"id": 3, "result": {}}),
         ]
-        with patch("websockets.connect", AsyncMock(return_value=mock_ws)):
+        with patch("pytvtools.cdp._ws_connect", AsyncMock(return_value=mock_ws)):
             cdp = CdpConnection("ws://localhost:9222/devtools/page/abc")
             await cdp.connect()
             await cdp.send_command("Runtime.evaluate", {"expression": "1"})

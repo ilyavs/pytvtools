@@ -14,7 +14,7 @@ import logging
 import os
 from typing import Any
 
-from pytvtools.cdp import CdpConnection, CdpError, find_tv_target, make_ws_url
+from pytvtools.cdp import CdpConnection, CdpError, close_tab, create_new_tab, find_tv_target, make_ws_url
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +66,8 @@ class TV:
     def __init__(self, port: int = 9222, target: dict[str, Any] | None = None):
         self.port = port
         self._target = target
+        self._target_id: str | None = None
+        self._own_tab = False
         self._cdp: CdpConnection | None = None
         self._indicator_ids: set[str] = set()
 
@@ -77,16 +79,27 @@ class TV:
         await self.disconnect()
 
     async def connect(self) -> None:
-        if not self._target:
-            self._target = await find_tv_target(port=self.port)
-        if not self._target:
-            raise RuntimeError(
-                "No TradingView chart tab found. "
-                "Open https://www.tradingview.com/chart/ in Chrome."
-            )
-        ws_url = make_ws_url(self._target)
+        import asyncio
+        if self._target:
+            ws_url = make_ws_url(self._target)
+            self._target_id = self._target.get("id")
+            self._own_tab = False
+        else:
+            logger.info("create_new_tab: creating blank page")
+            target = await create_new_tab(port=self.port)
+            self._target_id = target.get("id")
+            self._own_tab = True
+            ws_url = make_ws_url(target)
         self._cdp = CdpConnection(ws_url)
         await self._cdp.connect()
+        if self._own_tab:
+            # New tab — navigate to TradingView
+            await self._eval("window.location.href = 'https://www.tradingview.com/chart/'")
+            ready = await self.wait_for_chart_ready(timeout=30)
+            if not ready:
+                raise RuntimeError(
+                    "TradingView chart did not load in the new tab"
+                )
         self._indicator_ids = set(await self._get_study_ids())
         await self._close_dialogs()
 
@@ -189,6 +202,13 @@ class TV:
         if self._cdp:
             await self._cdp.close()
             self._cdp = None
+        if self._own_tab and self._target_id:
+            try:
+                await close_tab(self._target_id, port=self.port)
+            except Exception as exc:
+                logger.warning("disconnect: failed to close tab %s: %s", self._target_id, exc)
+            self._target_id = None
+            self._own_tab = False
 
     # ------------------------------------------------------------------
     # Chart control
@@ -361,11 +381,12 @@ class TV:
     # Data
     # ------------------------------------------------------------------
 
-    async def get_ohlcv(self, count: int = 500, summary: bool = False) -> Any:
+    async def get_ohlcv(self, count: int | None = None, summary: bool = False) -> Any:
+        slice_expr = "" if count is None else f".slice(-{count})"
         js = f"""
         (function() {{
             var items = {_CHART_API}.chartWidget().model().mainSeries().bars()._items;
-            var all = items.slice(-{count});
+            var all = items{slice_expr};
             var bars = [];
             for (var i = 0; i < all.length; i++) {{
                 var v = all[i].value;
@@ -402,7 +423,7 @@ class TV:
         """)
 
     async def get_study_values(self) -> dict[str, Any]:
-        """Read current values from ALL visible indicator studies."""
+        """Read ALL historical values from every visible indicator study."""
         return await self._eval(f"""
         (function() {{
             var model = {_CHART_API}.chartWidget().model();
@@ -1005,7 +1026,7 @@ class TV:
     # ------------------------------------------------------------------
 
     async def batch(
-        self, symbols: list[str], timeframes: list[str], action: str = "ohlcv", max_bars: int = 500
+        self, symbols: list[str], timeframes: list[str], action: str = "ohlcv", max_bars: int | None = None
     ) -> dict[str, Any]:
         """Iterate symbols/timeframes and collect data (CDP-based).
 
@@ -1027,9 +1048,10 @@ class TV:
             ``"studies"`` — indicator values only.
             ``"all"`` — both in one pass, returns nested dict per
             timeframe: ``{"ohlcv": ..., "studies": ...}``.
-        max_bars : int
+        max_bars : int or None
             Maximum bars to fetch per timeframe (passed to
-            ``get_ohlcv(count=max_bars)``).  Default 500.
+            ``get_ohlcv(count=max_bars)``).  ``None`` (default) returns
+            all available bars.
 
         Returns results for every symbol (partial data on failure).
         Always restores the original chart state.

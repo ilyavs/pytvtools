@@ -98,7 +98,7 @@ async def compare_indicator(
     indicator: str,
     entity_id: str | None = None,
     *,
-    max_bars: int = 500,
+    max_bars: int | None = None,
     tolerance: float = 0.01,
     plot_index: int = 0,
 ) -> ParityReport:

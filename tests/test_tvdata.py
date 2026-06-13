@@ -62,11 +62,10 @@ async def mock_tvdata():
     ws.recv = AsyncMock()
     ws.close = AsyncMock()
 
-    with patch("websockets.connect", AsyncMock(return_value=ws)):
-        td = TVData()
-        await td.__aenter__()
-        yield td, ws
-        await td.__aexit__(None, None, None)
+    td = TVData()
+    td._ws = ws  # skip actual connection, just set ws
+    yield td, ws
+    await td.__aexit__(None, None, None)
 
 
 class TestTVData:
@@ -206,7 +205,7 @@ class TestTVData:
         """TVData works as an async context manager."""
         ws = AsyncMock()
         ws.close = AsyncMock()
-        with patch("websockets.connect", AsyncMock(return_value=ws)):
+        with patch("pytvtools.tvdata._ws_connect", AsyncMock(return_value=ws)):
             async with TVData() as td:
                 assert td._ws is not None
             ws.close.assert_awaited_once()

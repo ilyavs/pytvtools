@@ -11,7 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Pre-install runtime deps (cached layer — only re-runs if deps change).
 # pytvtools itself is installed editable at container start from the bind mount.
-RUN pip install --no-cache-dir httpx websockets pyarrow
+# Pinned to match pyproject.toml: websockets>=16 changed connect() from coroutine to async context manager
+RUN pip install --no-cache-dir "httpx==0.28.1" "websockets==16.0" "pyarrow==24.0.0"
 
 ENV TV_CDP_PORT=9222
 ENV TV_URL=https://www.tradingview.com/chart/

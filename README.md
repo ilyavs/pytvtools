@@ -2,7 +2,7 @@
 
 Pure Python CDP library for TradingView in Chrome — no Node.js.
 
-Talk to TradingView's chart widget via Chrome DevTools Protocol. Read price data, add and read indicator values, run multi-symbol scans.
+Talk to TradingView's chart widget via Chrome DevTools Protocol. Read price data, add and read indicator values, run multi-symbol scans, inject Pine Script, and more.
 
 ## Quick start
 
@@ -20,13 +20,13 @@ async def main():
     await chrome.start(headless=True)
     async with TV() as tv:
         state = await tv.get_state()
-        print(state)  # {symbol: ..., timeframe: ..., chartType: ...}
+        print(state)
     await chrome.stop()
 
 asyncio.run(main())
 ```
 
-**Or connect to an already-running Chrome** (launched with `--remote-debugging-port=9222`, TV chart tab open):
+**Or connect to an already-running Chrome** (launched with `--remote-debugging-port=9222`):
 ```python
 from pytvtools import TV, wait_for_cdp
 
@@ -39,7 +39,6 @@ async with TV() as tv:
 ```
 pytvtools-chrome
 ```
-This prints the command — copy-paste it to launch Chrome.
 
 **Prerequisite:** Chrome with `https://www.tradingview.com/chart/` open. The auto-start path handles this.
 
@@ -62,6 +61,7 @@ This prints the command — copy-paste it to launch Chrome.
 |--------|---------|-------------|
 | `get_ohlcv(count=500, summary=False)` | `list[bar]` or dict | Price bars or compact stats |
 | `get_study_values()` | `{name: {title, values}}` | All visible indicator plot values |
+| `get_indicator_data(entity_id)` | `dict` | All historical plot values per plot name |
 | `get_quote()` | `{symbol: str}` | Current symbol |
 | `capture_screenshot()` | `str` | Base64 PNG |
 
@@ -75,7 +75,7 @@ This prints the command — copy-paste it to launch Chrome.
 | `remove_all_indicators()` | — | Remove all studies |
 | `set_indicator_inputs(entity_id, inputs)` | — | Change input values on an existing indicator |
 | `get_indicator_count()` | `int` | Number of indicators currently on the chart |
-| `list_templates(tab=None)` | `list[{name, description}]` | List saved templates (tab: ``"my templates"``, ``"technicals"``, ``"financials"``) |
+| `list_templates(tab=None)` | `list[{name, description}]` | List saved templates (tab: `"my templates"`, `"technicals"`, `"financials"`) |
 | `apply_template(name)` | — | Apply a saved indicator template (searches all tabs) |
 
 ### Pine Script drawings
@@ -92,6 +92,16 @@ This prints the command — copy-paste it to launch Chrome.
 | `pine_set_source(source)` | — | Inject source into the Pine editor |
 | `pine_compile()` | `{errors}` | Compile and return errors |
 
+### Bar replay
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `replay_start(date=None)` | `dict` | Enter bar-replay mode, optionally at a specific date |
+| `replay_stop()` | `dict` | Exit replay mode, return to realtime |
+| `replay_status()` | `dict` | Current replay state (date, autoplay, etc.) |
+| `replay_step()` | `dict` | Advance one bar |
+| `replay_autoplay(speed=0)` | `dict` | Toggle autoplay, optionally set delay (ms) |
+
 ### Multi-symbol
 
 | Method | Returns | Description |
@@ -103,19 +113,23 @@ This prints the command — copy-paste it to launch Chrome.
 ```
 examples/
   basic.py                      — connect, state, OHLCV, study values
-  chart_control.py              — symbol, timeframe, chart type, scroll, visible range
-  add_indicator_read_values.py  — add RSI, read values, remove
-  multi_symbol_scan.py          — iterate symbols, read indicators
-  pine_interaction.py           — inject Pine Script, compile, read errors
-  search_and_add_indicator.py   — search built-in & community, add by study_id
-  indicator_templates.py        — list templates from any tab, apply by name
+  chart_control.py              — symbol, timeframe, chart type, scroll, screenshot
+  add_indicator_read_values.py  — add indicators, read values, change inputs
+  multi_symbol_scan.py          — batch() scan across symbols/timeframes
+  search_and_add_indicator.py   — search by keyword, add by study_id
+  indicator_templates.py        — list and apply indicator templates
+  get_indicator_data.py         — all historical plot values for an indicator
+  pine_interaction.py           — inject Pine Script, compile, read drawings
+  tvdata_ohlcv.py               — fast OHLCV via direct WebSocket (no Chrome)
+  collector_demo.py             — Collector: multi-symbol batch + parquet/JSON export
+  indicator_parity.py           — compare Python indicator values vs TradingView
 ```
 
 ```bash
 # With Docker:
-docker compose exec pytvtools python examples/basic.py
+docker exec docker-pytvtools-1 python examples/basic.py
 
-# Without Docker (Chrome must be running):
+# Without Docker (Chrome must be running with CDP):
 python examples/basic.py
 ```
 
@@ -135,7 +149,7 @@ pytest tests/ -m "not integration" -v
 pytest tests/ -m integration -v --capture=no
 ```
 
-106 unit tests mock everything. 6 integration tests run every example against real TV.
+177 unit tests mock everything. 11 integration tests run every example against real TV.
 
 ## TradingView JS API reference
 
@@ -182,7 +196,7 @@ ssh -L 9222:localhost:9222 user@your-server
 ```bash
 docker compose -f docker/docker-compose.yml build
 docker compose -f docker/docker-compose.yml up -d
-docker compose exec pytvtools python examples/basic.py
+docker exec docker-pytvtools-1 python examples/basic.py
 ```
 
 Source code is volume-mounted at `/app`. Run `pip install -e /app` inside the container after editing for live changes.
@@ -190,9 +204,9 @@ Source code is volume-mounted at `/app`. Run `pip install -e /app` inside the co
 ## Design
 
 ```
-Your script → pytvtools (3 core Python files)
+Your script → pytvtools (Python)
                → CDP WebSocket → Chrome (headless)
-                                  → tradingview.com/chart
+                                   → tradingview.com/chart
 ```
 
 **Dependencies:** `httpx` (HTTP), `websockets` (CDP), `mcp` (optional).
@@ -204,7 +218,7 @@ Your script → pytvtools (3 core Python files)
 | `pip install` | git submodule + npm + node |
 | No Node.js | Requires Node.js |
 | Direct WebSocket to Chrome | stdio JSON-RPC to Node.js proxy |
-| 3 Python files | NPM audit, version drift |
+| Pure Python | NPM audit, version drift |
 
 ## Disclaimer
 

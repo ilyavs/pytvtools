@@ -64,7 +64,7 @@ class CollectorConfig:
     """
     symbols: list[str]
     timeframes: list[str]
-    max_bars: int = 500
+    max_bars: int | None = None
     actions: list[str] | None = None
 
     def __post_init__(self) -> None:
