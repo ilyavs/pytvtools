@@ -66,6 +66,30 @@ class TestCompareIndicator:
         with pytest.raises(ValueError, match="No Python implementation"):
             await compare_indicator(mock_tv, "TEST", "1D", "STD;UNKNOWN_STUDY")
 
+    async def test_sma_detected(self, mock_tv):
+        mock_tv.set_symbol = AsyncMock()
+        mock_tv.set_timeframe = AsyncMock()
+        mock_tv.get_ohlcv = AsyncMock(return_value=SAMPLE_BARS)
+        mock_tv.add_indicator = AsyncMock(return_value="abc123")
+        mock_tv.get_indicator_data = AsyncMock(return_value=SAMPLE_RSI_DATA)
+        report = await compare_indicator(
+            mock_tv, "TEST", "1D", "STD;SMA",
+            max_bars=30, tolerance=1.0,
+        )
+        assert report.indicator == "STD;SMA"
+
+    async def test_ema_detected(self, mock_tv):
+        mock_tv.set_symbol = AsyncMock()
+        mock_tv.set_timeframe = AsyncMock()
+        mock_tv.get_ohlcv = AsyncMock(return_value=SAMPLE_BARS)
+        mock_tv.add_indicator = AsyncMock(return_value="abc123")
+        mock_tv.get_indicator_data = AsyncMock(return_value=SAMPLE_RSI_DATA)
+        report = await compare_indicator(
+            mock_tv, "TEST", "1D", "STD;EMA",
+            max_bars=30, tolerance=1.0,
+        )
+        assert report.indicator == "STD;EMA"
+
     async def test_entity_id_provided(self, mock_tv):
         mock_tv.add_indicator = AsyncMock(return_value="abc123")
         mock_tv.get_indicator_data = AsyncMock(return_value=SAMPLE_RSI_DATA)

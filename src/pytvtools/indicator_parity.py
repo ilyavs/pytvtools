@@ -25,21 +25,17 @@ logger = logging.getLogger(__name__)
 # Map study entity IDs to their Python computation function
 _BUILTIN_COMPUTERS: dict[str, Any] = {
     "STD;RSI": rsi,
-    "SMA": sma,
-    "EMA": ema,
+    "STD;SMA": sma,
+    "STD;EMA": ema,
 }
-
-_STUDY_ID_TO_COMPUTER: dict[str, Any] = {}
 
 
 def _detect_computer(indicator: str) -> Any | None:
     """Find the Python function for a given indicator identifier."""
     if indicator in _BUILTIN_COMPUTERS:
         return _BUILTIN_COMPUTERS[indicator]
-    for prefix, func in _BUILTIN_COMPUTERS.items():
-        if indicator.startswith(prefix):
-            return func
-    return None
+    name = indicator.split(";", 1)[-1] if ";" in indicator else indicator
+    return _BUILTIN_COMPUTERS.get(name)
 
 
 class Mismatch:

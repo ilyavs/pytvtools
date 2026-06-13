@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import math
-
 import pytest
 
 from pytvtools.indicators import sma, ema, rsi, macd
@@ -38,17 +36,6 @@ class TestEMA:
     def test_ema_known_values(self):
         data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
         result = ema(data, period=3)
-        expected = [
-            None, None,
-            2.0,           # SMA seed for first 3
-            3.5,           # 4 + (10-4) * 0.5 = 3.5
-            5.25,          # 5 + (11.5-5) * 0.5 = 5.25 (wait let me calculate)
-        ]
-        # EMA(3) alpha = 2 / (3 + 1) = 0.5
-        # Seed = (1+2+3)/3 = 2.0 (value at index 2)
-        # index 3: (4 - 2) * 0.5 + 2 = 3.0
-        # index 4: (5 - 3) * 0.5 + 3 = 4.0
-        # index 5: (6 - 4) * 0.5 + 4 = 5.0
         expected = [None, None, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]
         assert approx(result) == approx(expected)
 

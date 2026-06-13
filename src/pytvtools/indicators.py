@@ -88,7 +88,6 @@ def rsi(data: list[float] | list[dict[str, Any]], period: int = 14) -> list[floa
         rs = avg_gain / avg_loss
         result.append(100.0 - 100.0 / (1.0 + rs))
 
-    alpha = 1.0 / period
     for i in range(period + 1, len(prices)):
         diff = prices[i] - prices[i - 1]
         gain = diff if diff > 0 else 0.0
