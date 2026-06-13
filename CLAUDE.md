@@ -41,6 +41,7 @@ await chrome.stop()
 async with TVData() as d:
     bars = await d.get_ohlcv("NASDAQ:AAPL", "1D", 100)
     summary = await d.get_ohlcv("BINANCE:BTCUSDT", "1D", 500, summary=True)
+    multi = await d.get_ohlcv_multi(["NASDAQ:AAPL", "BINANCE:BTCUSDT"], "1D", 100)
 ```
 
 ## All TV methods
@@ -68,6 +69,7 @@ async with TVData() as d:
 - `get_pine_lines(study_filter=None)` → price levels
 - `get_pine_labels(study_filter=None, max_labels=50)` → text labels
 - `batch(symbols, timeframes, action, max_bars=500)` — multi-symbol scan (CDP-based, handles rate limits)
+- `get_ohlcv_multi(symbols, interval, bars_count, summary, max_concurrent=10)` — parallel WS fetch, no Chrome needed
 - `pine_set_source(source)` — inject Pine code
 - `pine_compile()` — compile and read errors
 - `get_pine_source(study_id, entity_id=None)` — fetch Pine Script source of any public indicator

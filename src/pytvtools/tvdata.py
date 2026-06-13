@@ -197,6 +197,53 @@ class TVData:
                 })
         return bars
 
+    async def get_ohlcv_multi(
+        self,
+        symbols: list[str],
+        interval: str = "1D",
+        bars_count: int = 100,
+        *,
+        summary: bool = False,
+        max_concurrent: int = 10,
+    ) -> dict[str, Any]:
+        """Fetch OHLCV for multiple symbols in parallel.
+
+        Opens one WebSocket connection per symbol, up to ``max_concurrent``
+        at a time.  Each connection is independent — errors for one symbol
+        don't affect others.
+
+        Args:
+            symbols: List of TradingView symbols (e.g. ``"NASDAQ:AAPL"``).
+            interval: Timeframe (``"1"``, ``"5"``, ``"15"``, ``"60"``,
+                ``"D"``, ``"W"``, etc.).
+            bars_count: Number of bars per symbol (max 5000 for free tier).
+            summary: If True, return summary stats instead of all bars.
+            max_concurrent: Max parallel connections (default 10).
+
+        Returns
+        -------
+        dict[str, Any]
+            ``{symbol: result}`` — each result is the same format as
+            :meth:`get_ohlcv`.  On error, ``{symbol: {"error": str}}``.
+        """
+        sem = asyncio.Semaphore(max_concurrent)
+
+        async def _fetch(sym: str) -> Any:
+            async with sem:
+                async with TVData() as d:
+                    return await d.get_ohlcv(sym, interval, bars_count, summary=summary)
+
+        tasks = [_fetch(s) for s in symbols]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        out: dict[str, Any] = {}
+        for sym, result in zip(symbols, results):
+            if isinstance(result, Exception):
+                out[sym] = {"error": str(result)}
+            else:
+                out[sym] = result
+        return out
+
     def _result(
         self,
         bars: list[dict[str, Any]],

@@ -115,7 +115,8 @@ pytvtools-chrome
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `batch(symbols, timeframes, action)` | `{symbol: {tf: data}}` | Scan multiple symbols/timeframes |
+| `batch(symbols, timeframes, action)` | `{symbol: {tf: data}}` | CDP-based multi-symbol scan |
+| `get_ohlcv_multi(symbols, interval, ...)` | `{symbol: data}` | Parallel WS fetch — no Chrome needed |
 
 ## Examples
 
@@ -132,6 +133,7 @@ examples/
   tvdata_ohlcv.py               — fast OHLCV via direct WebSocket (no Chrome)
   collector_demo.py             — Collector: multi-symbol batch + parquet/JSON export
   indicator_parity.py           — compare Python indicator values vs TradingView
+  tvdata_multi.py               — parallel OHLCV fetch across 25 symbols (no Chrome)
 ```
 
 ```bash
@@ -159,7 +161,7 @@ pytest tests/ -m "not integration" -v
 pytest tests/ -m integration -v --capture=no
 ```
 
-183 unit tests mock everything. 11 integration tests run every example against real TV.
+186 unit tests mock everything. 12 integration tests run every example against real TV.
 
 ## TradingView JS API reference
 

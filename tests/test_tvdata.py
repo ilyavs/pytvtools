@@ -245,3 +245,48 @@ class TestTVData:
 
         result = await td.get_ohlcv("NASDAQ:AAPL", "1D", 1)
         assert len(result) == 1
+
+
+class TestTVDataMulti:
+    """get_ohlcv_multi parallel fetch tests."""
+
+    async def test_get_ohlcv_multi_basic(self):
+        """Multiple symbols fetched in parallel."""
+        with patch("pytvtools.tvdata._ws_connect", AsyncMock()):
+            with patch.object(TVData, "get_ohlcv") as mock_get:
+                async def side_effect(sym, *args, **kwargs):
+                    return {"symbol": sym, "bars": 100}
+                mock_get.side_effect = side_effect
+
+                td = TVData()
+                result = await td.get_ohlcv_multi(["A", "B", "C"], "1D", 100)
+
+        assert result == {
+            "A": {"symbol": "A", "bars": 100},
+            "B": {"symbol": "B", "bars": 100},
+            "C": {"symbol": "C", "bars": 100},
+        }
+        assert mock_get.call_count == 3
+
+    async def test_get_ohlcv_multi_error_isolation(self):
+        """An error for one symbol doesn't affect others."""
+        with patch("pytvtools.tvdata._ws_connect", AsyncMock()):
+            with patch.object(TVData, "get_ohlcv") as mock_get:
+                async def side_effect(sym, *args, **kwargs):
+                    if sym == "B":
+                        raise ValueError("bad symbol")
+                    return {"symbol": sym, "bars": 100}
+                mock_get.side_effect = side_effect
+
+                td = TVData()
+                result = await td.get_ohlcv_multi(["A", "B", "C"], "1D", 100)
+
+        assert result["A"] == {"symbol": "A", "bars": 100}
+        assert "error" in result["B"]
+        assert result["C"] == {"symbol": "C", "bars": 100}
+
+    async def test_get_ohlcv_multi_empty(self):
+        """Empty symbol list returns empty dict."""
+        td = TVData()
+        result = await td.get_ohlcv_multi([], "1D", 100)
+        assert result == {}

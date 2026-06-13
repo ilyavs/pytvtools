@@ -30,7 +30,7 @@ docker exec -w /app docker-pytvtools-1 python -m pytest tests/ -m integration -v
 # Run an example
 docker exec -w /app docker-pytvtools-1 python examples/basic.py
 
-# Unit test count: 183 (all mock, no Chrome needed)
+# Unit test count: 186 (all mock, no Chrome needed)
 # Integration test count: 11 (requires live Chrome + TV tab)
 ```
 
