@@ -66,6 +66,7 @@ class TVData:
         self._ws = await _ws_connect(
             _WS_URL,
             additional_headers={
+                "Origin": "https://www.tradingview.com",
                 "User-Agent": (
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -204,7 +205,7 @@ class TVData:
         bars_count: int = 100,
         *,
         summary: bool = False,
-        max_concurrent: int = 10,
+        max_concurrent: int = 5,
     ) -> dict[str, Any]:
         """Fetch OHLCV for multiple symbols in parallel.
 
