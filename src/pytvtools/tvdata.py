@@ -95,10 +95,11 @@ class TVData:
         Args:
             symbol: TradingView symbol (e.g. "NASDAQ:AAPL", "BINANCE:BTCUSDT").
             interval: Timeframe ("1", "5", "15", "60", "D", "W", etc.).
-            bars_count: Number of bars to fetch.  Supported limits vary
-                by symbol and timeframe — SP:SPX handles 5000 on any TF,
-                crypto/high-frequency TFs may cap at ~4179 (1D), and
-                weekly/monthly caps are tighter (139-2375).
+            bars_count: Number of bars to fetch.  Limits vary by
+                timeframe:
+                - Intraday (1/5/15/60): ~5000-6000 (chart inception)
+                - Daily: 5000 safe (WS frame hits 1MB at ~8000)
+                - Weekly: ~5600, Monthly: ~1670 (chart inception)
             summary: If True, return summary stats instead of all bars.
 
         Returns:
