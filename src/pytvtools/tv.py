@@ -1171,7 +1171,7 @@ class TV:
         await asyncio.sleep(0.5)
 
         if date:
-            await self._eval(f"{rp}.selectDate(new Date('{date}'))")
+            await self._eval(f"{rp}.selectDate(new Date({_js_str(date)}))")
         else:
             await self._eval(f"{rp}.selectFirstAvailableDate()")
         await asyncio.sleep(1)
@@ -1236,6 +1236,7 @@ class TV:
         started = await self._eval(f"{rp}.isReplayStarted()")
         if not started:
             return {"success": False, "error": "Replay not started. Call replay_start() first."}
+        speed = int(speed)
         if speed > 0:
             await self._eval(f"{rp}.changeAutoplayDelay({speed})")
         await self._eval(f"{rp}.toggleAutoplay()")
