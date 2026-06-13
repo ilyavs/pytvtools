@@ -30,7 +30,7 @@ docker exec docker-pytvtools-1 python -m pytest tests/ -m integration -v --captu
 # Run an example
 docker exec docker-pytvtools-1 python examples/basic.py
 
-# Unit test count: 122 (all mock, no Chrome needed)
+# Unit test count: 177 (all mock, no Chrome needed)
 # Integration test count: 8 (requires live Chrome + TV tab)
 ```
 
@@ -54,6 +54,10 @@ Host edits → src/pytvtools/*.py → mounted to /app → runs in container
 | `tests/test_tvdata.py` | Unit tests for TVData direct WS fetcher |
 | `tests/test_cdp.py` | Unit tests for CDP transport |
 | `tests/test_chrome.py` | Unit tests for Chrome lifecycle |
+| `src/pytvtools/indicators.py` | Pure-Python technical indicator implementations |
+| `src/pytvtools/indicator_parity.py` | Python vs TradingView indicator comparison utility |
+| `tests/test_indicators.py` | Unit tests for Python indicators |
+| `tests/test_indicator_parity.py` | Unit tests for comparison utility |
 | `examples/` | Runnable examples (also integration test targets) |
 
 ## Implementation rules

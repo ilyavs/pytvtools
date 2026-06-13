@@ -14,7 +14,10 @@ Pure Python CDP library for TradingView in Chrome. No Node.js, no submodules.
 | `src/pytvtools/tv.py` | `TV` — high-level TradingView client (CDP-based) |
 | `src/pytvtools/tvdata.py` | `TVData` — direct WebSocket OHLCV fetcher (no CDP, fast) |
 | `src/pytvtools/collector.py` | `Collector` — multi-symbol batch data collection + parquet/JSON export |
+| `src/pytvtools/collector.py` | `Collector` — multi-symbol batch data collection + parquet/JSON export |
 | `src/pytvtools/watchlists.py` | `Watchlist` — frozen dataclass + predefined watchlists (SPDR sectors, industries) |
+| `src/pytvtools/indicators.py` | Pure-Python SMA, EMA, RSI, MACD implementations |
+| `src/pytvtools/indicator_parity.py` | `compare_indicator()` — verify Python vs TV indicator outputs match |
 | `src/pytvtools/__init__.py` | Re-exports |
 
 ## Usage
@@ -67,10 +70,15 @@ async with TVData() as d:
 - `get_pine_labels(study_filter=None, max_labels=50)` → text labels
 - `get_pine_boxes(study_filter=None)` → price zones
 - `get_pine_tables(study_filter=None)` → formatted text rows
-- `batch(symbols, timeframes, action)` — multi-symbol scan (CDP-based, handles rate limits)
+- `batch(symbols, timeframes, action, max_bars=500)` — multi-symbol scan (CDP-based, handles rate limits)
 - `pine_set_source(source)` — inject Pine code
 - `pine_compile()` — compile and read errors
 - `set_symbol(symbol, timeout=10, wait_data=True)` — `wait_data=False` skips chart-ready check
+- `replay_start(date=None)` — enter bar-replay mode (optionally at a specific date)
+- `replay_stop()` — exit replay mode, return to realtime
+- `replay_status()` → `{is_replay_started, current_date, ...}`
+- `replay_step()` — advance one bar in replay mode
+- `replay_autoplay(speed=0)` — toggle autoplay, optionally set delay (ms)
 
 ## MCP server (optional)
 
@@ -177,6 +185,7 @@ config = CollectorConfig(
     symbols=["NASDAQ:AAPL", "BINANCE:BTCUSDT"],
     timeframes=["1D", "60"],
     actions=["ohlcv", "studies"],  # or ["ohlcv"] for OHLCV-only
+    max_bars=1000,                  # optional, passed to get_ohlcv(count=...)
 )
 collector = Collector(config)
 async with TV() as tv:
@@ -190,6 +199,31 @@ Record schema (parquet/JSON):
 - `symbol`, `timeframe`, `scan_ts` — identification
 - `ohlcv_count`, `ohlcv_high`, `ohlcv_low`, `ohlcv_open`, `ohlcv_close`, `ohlcv_avg_volume`, `ohlcv_range` — OHLCV summary stats
 - `st_<study name>` — latest value for each indicator (prefixed with `st_`)
+
+## Python indicators
+
+```python
+from pytvtools.indicators import sma, ema, rsi, macd
+
+bars = await tv.get_ohlcv(count=500, summary=False)
+closes = [b["close"] for b in bars]
+rsi_vals = rsi(closes, period=14)  # [None]*14 + float values, Wilder's smoothing
+sma_vals = sma(closes, period=20)
+ema_vals = ema(closes, period=20)
+macd_vals = macd(closes, fast=12, slow=26, signal=9)
+```
+
+## Indicator parity (Python vs TradingView)
+
+```python
+from pytvtools import TV
+from pytvtools.indicator_parity import compare_indicator
+
+async with TV() as tv:
+    report = await compare_indicator(tv, "BINANCE:BTCUSDT", "1D", "STD;RSI")
+    print(report.summary())
+    # Total bars, match rate, mismatches
+```
 
 ## Remote tunnel
 
