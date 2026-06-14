@@ -1,12 +1,14 @@
 """Multi-symbol data collector for TradingView — batch fetch + parquet export.
 
-Wraps ``TV.batch()`` with:
-- Configurable symbol / timeframe lists
-- Merge of OHLCV + study data into flat records
-- Parquet export for post-hoc analysis in a separate project
+Two collector classes:
+
+- ``Collector`` — CDP-based (wraps ``TV.batch()``), fetches OHLCV + studies.
+- ``TVDataCollector`` — pure WebSocket (wraps ``TVData.get_ohlcv_multi()``),
+  OHLCV only, no Chrome needed.
 
 Usage::
 
+    # CDP path (studies too)
     from pytvtools import TV, Collector, CollectorConfig
 
     config = CollectorConfig(
@@ -17,7 +19,18 @@ Usage::
     collector = Collector(config)
     async with TV() as tv:
         result = await collector.run(tv)
-    path = collector.export_parquet("data.parquet")
+    collector.export_parquet("data.parquet")
+
+    # CDP-free path (OHLCV only)
+    from pytvtools import TVDataCollector
+
+    collector = TVDataCollector(
+        symbols=["SP:SPX", "COINBASE:BTCUSD"],
+        timeframes=["1D", "60"],
+        bars_count=500,
+    )
+    result = await collector.run()
+    collector.export_parquet("data.parquet")
 """
 
 from __future__ import annotations
@@ -68,11 +81,12 @@ class CollectorConfig:
         TradingView symbol strings (e.g. ``"BINANCE:BTCUSDT"``).
     timeframes : list[str]
         Timeframe strings (``"1D"``, ``"60"``, ``"15"``, etc.)
-    max_bars : int
-        Maximum bars to fetch per symbol/timeframe (default 500).
-        Passed directly to ``get_ohlcv(count=max_bars)``.  The CDP
-        path reads whatever bars the chart has loaded in memory;
-        scrolling the chart back first can load more.
+    max_bars : int | None
+        Maximum bars to fetch per symbol/timeframe (default ``None`` —
+        fetch all bars the chart has loaded).  Passed directly to
+        ``get_ohlcv(count=max_bars)``.  The CDP path reads whatever
+        bars the chart has loaded in memory; scrolling the chart back
+        first can load more.
     actions : list[str] | None
         Which actions to run.  ``None`` (default) means both
         ``["ohlcv", "studies"]``.  Pass ``["ohlcv"]`` for a faster
@@ -239,25 +253,7 @@ class Collector:
         """
         if self._result is None:
             raise RuntimeError("Call run() before export_parquet()")
-
-        pa, pq = _get_pyarrow()
-        path = Path(path)
-        if path.suffix.lower() != ".parquet":
-            path = path.with_suffix(".parquet")
-        if path.exists() and not overwrite:
-            raise FileExistsError(f"{path} exists — set overwrite=True to replace")
-
-        records = self._result.records
-        if not records:
-            logger.warning("Collector: no records to export — writing empty file")
-            table = _empty_table()
-            pq.write_table(table, path)
-            return path
-
-        table = _records_to_table(records)
-        pq.write_table(table, path, compression="zstd")
-        logger.info("Collector: exported %d records to %s", len(records), path)
-        return path
+        return _do_export_parquet(self._result, path, overwrite)
 
     def export_json(
         self,
@@ -268,16 +264,7 @@ class Collector:
         """Export collected data as newline-delimited JSON."""
         if self._result is None:
             raise RuntimeError("Call run() before export_json()")
-
-        path = Path(path)
-        if path.exists() and not overwrite:
-            raise FileExistsError(f"{path} exists — set overwrite=True to replace")
-
-        with open(path, "w", encoding="utf-8") as f:
-            for rec in self._result.records:
-                f.write(json.dumps(rec, default=str) + "\n")
-        logger.info("Collector: exported %d records to %s", len(self._result.records), path)
-        return path
+        return _do_export_json(self._result, path, overwrite)
 
     # ------------------------------------------------------------------
     # Merging helpers
@@ -424,21 +411,7 @@ class TVDataCollector:
         """Same as :meth:`Collector.export_parquet`."""
         if self._result is None:
             raise RuntimeError("Call run() before export_parquet()")
-        pa, pq = _get_pyarrow()
-        path = Path(path)
-        if path.suffix.lower() != ".parquet":
-            path = path.with_suffix(".parquet")
-        if path.exists() and not overwrite:
-            raise FileExistsError(f"{path} exists — set overwrite=True to replace")
-        records = self._result.records
-        if not records:
-            table = _empty_table()
-            pq.write_table(table, path)
-            return path
-        table = _records_to_table(records)
-        pq.write_table(table, path, compression="zstd")
-        logger.info("TVDataCollector: exported %d records to %s", len(records), path)
-        return path
+        return _do_export_parquet(self._result, path, overwrite)
 
     def export_json(
         self,
@@ -449,14 +422,55 @@ class TVDataCollector:
         """Same as :meth:`Collector.export_json`."""
         if self._result is None:
             raise RuntimeError("Call run() before export_json()")
-        path = Path(path)
-        if path.exists() and not overwrite:
-            raise FileExistsError(f"{path} exists — set overwrite=True to replace")
-        with open(path, "w", encoding="utf-8") as f:
-            for rec in self._result.records:
-                f.write(json.dumps(rec, default=str) + "\n")
-        logger.info("TVDataCollector: exported %d records to %s", len(self._result.records), path)
+        return _do_export_json(self._result, path, overwrite)
+
+
+# ---------------------------------------------------------------------------
+# Shared export helpers (used by both Collector and TVDataCollector)
+# ---------------------------------------------------------------------------
+
+
+def _do_export_parquet(
+    result: CollectResult,
+    path: str | Path,
+    overwrite: bool,
+) -> Path:
+    """Write collected records to a Parquet file."""
+    pa, pq = _get_pyarrow()
+    path = Path(path)
+    if path.suffix.lower() != ".parquet":
+        path = path.with_suffix(".parquet")
+    if path.exists() and not overwrite:
+        raise FileExistsError(f"{path} exists — set overwrite=True to replace")
+
+    records = result.records
+    if not records:
+        logger.warning("Collector: no records to export — writing empty file")
+        table = _empty_table()
+        pq.write_table(table, path)
         return path
+
+    table = _records_to_table(records)
+    pq.write_table(table, path, compression="zstd")
+    logger.info("Collector: exported %d records to %s", len(records), path)
+    return path
+
+
+def _do_export_json(
+    result: CollectResult,
+    path: str | Path,
+    overwrite: bool,
+) -> Path:
+    """Write collected records to newline-delimited JSON."""
+    path = Path(path)
+    if path.exists() and not overwrite:
+        raise FileExistsError(f"{path} exists — set overwrite=True to replace")
+
+    with open(path, "w", encoding="utf-8") as f:
+        for rec in result.records:
+            f.write(json.dumps(rec, default=str) + "\n")
+    logger.info("Collector: exported %d records to %s", len(result.records), path)
+    return path
 
 
 # ---------------------------------------------------------------------------

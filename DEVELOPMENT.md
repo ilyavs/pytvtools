@@ -31,7 +31,7 @@ docker exec -w /app docker-pytvtools-1 python -m pytest tests/ -m integration -v
 docker exec -w /app docker-pytvtools-1 python examples/basic.py
 
 # Unit test count: 203 (all mock, no Chrome needed)
-# Integration test count: 11 (requires live Chrome + TV tab)
+# Integration tests: auto-discovers examples/*.py (currently 14, requires live Chrome)
 ```
 
 ## Architecture

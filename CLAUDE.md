@@ -13,7 +13,7 @@ Pure Python CDP library for TradingView in Chrome. No Node.js, no submodules.
 | `src/pytvtools/chrome.py` | `Chrome` — launch/stop/restart headless Chrome with CDP |
 | `src/pytvtools/tv.py` | `TV` — high-level TradingView client (CDP-based) |
 | `src/pytvtools/tvdata.py` | `TVData` — direct WebSocket OHLCV fetcher (no CDP, fast) |
-| `src/pytvtools/collector.py` | `Collector` — multi-symbol batch data collection + parquet/JSON export |
+| `src/pytvtools/collector.py` | `Collector` — multi-symbol batch (CDP-based, studies too); `TVDataCollector` — OHLCV-only batch (no Chrome, wraps `get_ohlcv_multi`) |
 | `src/pytvtools/watchlists.py` | `Watchlist` — frozen dataclass + predefined watchlists |
 | `src/pytvtools/indicators.py` | Pure-Python SMA, EMA, RSI, MACD implementations |
 | `src/pytvtools/indicator_parity.py` | `compare_indicator()` — verify Python vs TV indicator outputs match |
@@ -176,7 +176,25 @@ chrome = Chrome()
 await chrome.start(headless=True)
 ```
 
-## Collector (multi-symbol + parquet export)
+## TVDataCollector (CDP-free, OHLCV only)
+
+```python
+from pytvtools import TVDataCollector
+
+collector = TVDataCollector(
+    symbols=["SP:SPX", "COINBASE:BTCUSD"],
+    timeframes=["1D", "60"],
+    bars_count=500,
+    max_concurrent=3,
+)
+result = await collector.run()
+path = collector.export_parquet("data.parquet")
+path = collector.export_json("data.json")
+```
+
+Same record schema as Collector (no `st_` study columns). No Chrome needed — pure WebSocket via TVData.
+
+## Collector (multi-symbol, CDP-based, studies too)
 
 ```python
 from pytvtools import Collector, CollectorConfig
