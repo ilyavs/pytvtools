@@ -103,6 +103,65 @@ def rsi(data: list[float] | list[dict[str, Any]], period: int = 14) -> list[floa
     return result
 
 
+def mfi(data: list[float] | list[dict[str, Any]], period: int = 14) -> list[float | None]:
+    """Money Flow Index (SMA-based rolling sum).
+
+    Requires OHLCV bar dicts with ``"high"``, ``"low"``, ``"close"``, ``"volume"`` keys.
+    Raises ``ValueError`` if given a flat list of floats (no volume data).
+
+    Uses a rolling sum of positive/negative money flow over *period* bars
+    (SMA-equivalent), matching TradingView's built-in MFI.
+    """
+    if not data:
+        return []
+
+    if isinstance(data[0], dict):
+        highs = [float(d["high"]) for d in data]
+        lows = [float(d["low"]) for d in data]
+        closes = [float(d["close"]) for d in data]
+        volumes = [float(d["volume"]) for d in data]
+    else:
+        raise ValueError(
+            "mfi() requires OHLCV bar dicts with 'high', 'low', 'close', "
+            "'volume' keys. A flat list of closes is not sufficient."
+        )
+
+    n = len(closes)
+    if n < period + 1:
+        return [None] * n
+
+    tp = [(highs[i] + lows[i] + closes[i]) / 3.0 for i in range(n)]
+
+    result: list[float | None] = [None] * period
+
+    pos: list[float] = [0.0]
+    neg: list[float] = [0.0]
+    for i in range(1, n):
+        mf = tp[i] * volumes[i]
+        if tp[i] > tp[i - 1]:
+            pos.append(mf)
+            neg.append(0.0)
+        elif tp[i] < tp[i - 1]:
+            pos.append(0.0)
+            neg.append(mf)
+        else:
+            pos.append(0.0)
+            neg.append(0.0)
+
+    for i in range(period, n):
+        sum_pos = sum(pos[i - period + 1 : i + 1])
+        sum_neg = sum(neg[i - period + 1 : i + 1])
+        if sum_neg == 0.0:
+            result.append(100.0)
+        elif sum_pos == 0.0:
+            result.append(0.0)
+        else:
+            mr = sum_pos / sum_neg
+            result.append(100.0 - 100.0 / (1.0 + mr))
+
+    return result
+
+
 def macd(
     data: list[float] | list[dict[str, Any]],
     fast: int = 12,

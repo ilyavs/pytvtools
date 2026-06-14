@@ -14,10 +14,11 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
-from pytvtools.indicators import rsi, sma, ema
+from pytvtools.indicators import rsi, sma, ema, mfi
 from pytvtools.tv import TV
 
 logger = logging.getLogger(__name__)
@@ -27,13 +28,30 @@ _BUILTIN_COMPUTERS: dict[str, Any] = {
     "STD;RSI": rsi,
     "STD;SMA": sma,
     "STD;EMA": ema,
+    "STD;Money_Flow": mfi,
 }
+
+# Convenience aliases → canonical TV study ID
+_STUDY_ID_ALIASES: dict[str, str] = {
+    "STD;MFI": "STD;Money_Flow",
+    "MFI": "STD;Money_Flow",
+}
+
+
+def _resolve_study_id(indicator: str) -> str:
+    """Resolve convenience aliases to canonical TV study IDs."""
+    if indicator in _BUILTIN_COMPUTERS:
+        return indicator
+    return _STUDY_ID_ALIASES.get(indicator, indicator)
 
 
 def _detect_computer(indicator: str) -> Any | None:
     """Find the Python function for a given indicator identifier."""
     if indicator in _BUILTIN_COMPUTERS:
         return _BUILTIN_COMPUTERS[indicator]
+    aliased = _STUDY_ID_ALIASES.get(indicator)
+    if aliased and aliased in _BUILTIN_COMPUTERS:
+        return _BUILTIN_COMPUTERS[aliased]
     name = indicator.split(";", 1)[-1] if ";" in indicator else indicator
     return _BUILTIN_COMPUTERS.get(name)
 
@@ -126,12 +144,18 @@ async def compare_indicator(
     """
     await tv.set_symbol(symbol)
     await tv.set_timeframe(timeframe)
+    await tv.wait_for_chart_ready(timeout=10)
 
-    bars = await tv.get_ohlcv(count=max_bars, summary=False)
+    # Fetch ALL bars so timestamps align with the indicator data source
+    # (both use midnight UTC when no count limit is applied).
+    bars = await tv.get_ohlcv(summary=False)
     if not bars:
         raise ValueError(f"No OHLCV data returned for {symbol} {timeframe}")
 
-    closes = [b["close"] for b in bars]
+    # If max_bars is set, trim to the most recent bars
+    if max_bars is not None and len(bars) > max_bars:
+        bars = bars[-max_bars:]
+
     timestamps = [b["timestamp"] for b in bars]
 
     computer = _detect_computer(indicator)
@@ -142,15 +166,26 @@ async def compare_indicator(
             f"Available: {available}"
         )
 
-    py_values: list[float | None] = computer(closes)  # type: ignore[operator]
+    if computer is mfi:
+        py_values = computer(bars)  # type: ignore[operator]
+    else:
+        closes = [float(b["close"]) for b in bars]
+        py_values = computer(closes)  # type: ignore[operator]
 
     if entity_id is None:
-        eid = await tv.add_indicator(indicator)
+        study_id = _resolve_study_id(indicator)
+        eid = await tv.add_indicator(study_id)
         if eid is None:
             raise RuntimeError(f"Failed to add indicator {indicator}")
         entity_id = eid
 
-    tv_data = await tv.get_indicator_data(entity_id)
+    for _ in range(15):
+        tv_data = await tv.get_indicator_data(entity_id)
+        if tv_data and tv_data.get("plots") and tv_data["count"] > 0:
+            break
+        await asyncio.sleep(0.5)
+    else:
+        tv_data = await tv.get_indicator_data(entity_id)
     if tv_data is None:
         raise RuntimeError(f"No data returned for indicator {entity_id}")
 
@@ -163,7 +198,7 @@ async def compare_indicator(
 
     tv_values_by_ts: dict[int, float | None] = {}
     for entry in plots[plot_index]["values"]:
-        tv_values_by_ts[entry["timestamp"]] = entry["value"]
+        tv_values_by_ts[int(entry["timestamp"])] = entry["value"]
 
     mismatches: list[Mismatch] = []
     matched = 0

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pytvtools.indicators import sma, ema, rsi, macd
+from pytvtools.indicators import sma, ema, rsi, macd, mfi
 
 
 def approx(seq):
@@ -115,3 +115,81 @@ class TestMACD:
         assert len(result["macd"]) == len(prices)
         assert len(result["signal"]) == len(prices)
         assert len(result["histogram"]) == len(prices)
+
+
+class TestMFI:
+    def test_mfi_known_values(self):
+        """MFI(2) on manually computed OHLCV data."""
+        bars = [
+            {"high": 3, "low": 1, "close": 2, "volume": 10},
+            {"high": 5, "low": 3, "close": 4, "volume": 10},
+            {"high": 7, "low": 5, "close": 6, "volume": 10},
+            {"high": 2, "low": 0, "close": 1, "volume": 10},
+            {"high": 6, "low": 4, "close": 5, "volume": 10},
+        ]
+        # TP: [2, 4, 6, 1, 5]
+        # pos: [0, 40, 60, 0, 50], neg: [0, 0, 0, 10, 0]
+        # MFI[2]=100, MFI[3]=85.714286, MFI[4]=83.333333
+        result = mfi(bars, period=2)
+        assert result[:2] == [None, None]
+        assert result[2] == 100.0
+        assert result[3] is not None and round(result[3], 6) == 85.714286
+        assert result[4] is not None and round(result[4], 6) == 83.333333
+
+    def test_mfi_dict_input(self):
+        """MFI with dict bars should work."""
+        bars = [
+            {"high": 10, "low": 8, "close": 9, "volume": 100},
+            {"high": 12, "low": 10, "close": 11, "volume": 200},
+            {"high": 14, "low": 12, "close": 13, "volume": 150},
+            {"high": 9, "low": 7, "close": 8, "volume": 300},
+        ]
+        result = mfi(bars, period=2)
+        assert len(result) == 4
+        assert result[:2] == [None, None]
+        assert result[2] is not None
+        assert result[3] is not None
+
+    def test_mfi_flat_list_raises(self):
+        """Passing a flat list of floats should raise ValueError."""
+        with pytest.raises(ValueError, match="requires OHLCV"):
+            mfi([1.0, 2.0, 3.0], period=14)
+
+    def test_mfi_too_short(self):
+        """Fewer bars than period+1 should return all None."""
+        bars = [{"high": 1, "low": 1, "close": 1, "volume": 1} for _ in range(3)]
+        result = mfi(bars, period=14)
+        assert result == [None, None, None]
+
+    def test_mfi_empty(self):
+        assert mfi([], period=14) == []
+
+    def test_mfi_all_up(self):
+        """MFI should be 100 when typical price only rises."""
+        bars = []
+        for i in range(20):
+            bars.append({
+                "high": 100 + i + 1,
+                "low": 100 + i,
+                "close": 100 + i + 0.5,
+                "volume": 1000,
+            })
+        result = mfi(bars, period=14)
+        assert result[14] == 100.0
+        assert all(v == 100.0 for v in result[14:])
+
+    def test_mfi_range(self):
+        """MFI values should be between 0 and 100."""
+        import random
+        random.seed(42)
+        bars = []
+        for _ in range(100):
+            h = random.uniform(50, 150)
+            l = h - random.uniform(1, 10)
+            c = random.uniform(l, h)
+            v = random.uniform(1000, 10000)
+            bars.append({"high": h, "low": l, "close": c, "volume": v})
+        result = mfi(bars, period=14)
+        for v in result:
+            if v is not None:
+                assert 0 <= v <= 100, f"MFI out of range: {v}"
