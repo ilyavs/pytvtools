@@ -28,9 +28,6 @@ MAX_CONCURRENT = 5
 # SPDR_ALL combines SPDR_SECTORS + SPDR_INDUSTRIES
 SYMBOLS = list(SPDR_ALL)
 
-# XTH is defunct (no longer trades) — filter it out
-SYMBOLS = [s for s in SYMBOLS if s != "XTH"]
-
 
 async def main() -> None:
     outdir = Path(__file__).parent / "_output" / "spdr"
