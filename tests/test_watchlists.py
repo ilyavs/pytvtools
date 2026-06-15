@@ -16,8 +16,8 @@ class TestWatchlist:
 
     def test_len(self):
         assert len(SPDR_SECTORS) == 11
-        assert len(SPDR_INDUSTRIES) == 16
-        assert len(SPDR_ALL) == 27
+        assert len(SPDR_INDUSTRIES) == 19
+        assert len(SPDR_ALL) == 30
 
     def test_iter(self):
         assert list(SPDR_SECTORS)[0] == "XLK"

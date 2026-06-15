@@ -95,7 +95,10 @@ SPDR_INDUSTRIES = Watchlist(
         "XTL",   # Telecom
         "XNTK",  # NYSE Technology
         "XITK",  # FactSet Innovative Technology
-        "XTH",   # Technology Hardware
+        "KBE",   # Banking
+        "KRE",   # Regional Banking
+        "SLX",   # Steel
+        "XWEB",  # Internet
     ),
 )
 
