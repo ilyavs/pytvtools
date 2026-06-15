@@ -1,2 +1,3 @@
-# Example output files
-examples/_output/
+# Ignore all generated output files
+*
+!.gitignore
