@@ -221,7 +221,7 @@ Record schema (parquet/JSON):
 ## Python indicators
 
 ```python
-from pytvtools.indicators import sma, ema, rsi, macd
+from pytvtools.indicators import sma, ema, rsi, macd, mfi
 
 bars = await tv.get_ohlcv(count=500, summary=False)
 closes = [b["close"] for b in bars]
@@ -229,7 +229,28 @@ rsi_vals = rsi(closes, period=14)  # [None]*14 + float values, Wilder's smoothin
 sma_vals = sma(closes, period=20)
 ema_vals = ema(closes, period=20)
 macd_vals = macd(closes, fast=12, slow=26, signal=9)
+# Volume-based: pass full OHLCV bars
+mfi_vals = mfi(bars, period=14)
 ```
+
+## Adding a new indicator (Python + TV parity)
+
+1. **Implement** in `indicators.py`. Accept `list[float] | list[dict[str, Any]]`:
+   - Close-only: `_prices(data)` extracts `"close"` from dict bars, returns `list[float]`
+   - Multi-column (MFI, OBV, etc.): extract `high`/`low`/`close`/`volume` directly from dict bars inline; raise `ValueError` if given flat floats
+   - Return `list[float | None]` with leading `None`s
+
+2. **Register** in `indicator_parity.py`:
+   - Add to `_BUILTIN_COMPUTERS` with canonical TV study ID (e.g. `"STD;Money_Flow": mfi`)
+   - Add alias in `_STUDY_ID_ALIASES` if user-facing name differs (e.g. `"STD;MFI" → "STD;Money_Flow"`)
+   - No special branch needed in `compare_indicator` — it always passes `bars`; `_prices()` handles close-only extraction
+
+3. **Test parity**:
+   ```python
+   from pytvtools.indicator_parity import compare_indicator
+   report = await compare_indicator(tv, "BINANCE:BTCUSDT", "1D", "STD;<id>")
+   ```
+   Target >99% match at ±0.01 tolerance. The function waits up to 7.5s for indicator data after adding it.
 
 ## Indicator parity (Python vs TradingView)
 

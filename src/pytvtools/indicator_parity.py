@@ -166,11 +166,7 @@ async def compare_indicator(
             f"Available: {available}"
         )
 
-    if computer is mfi:
-        py_values = computer(bars)  # type: ignore[operator]
-    else:
-        closes = [float(b["close"]) for b in bars]
-        py_values = computer(closes)  # type: ignore[operator]
+    py_values = computer(bars)  # type: ignore[operator]
 
     if entity_id is None:
         study_id = _resolve_study_id(indicator)
