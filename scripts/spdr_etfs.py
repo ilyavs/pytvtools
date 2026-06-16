@@ -1,15 +1,14 @@
 """Fetch full daily history for all SPDR sector & industry ETFs via TVDataCollector.
 
 Uses the predefined watchlists from pytvtools.watchlists.
-Saves one parquet file per ETF (plus a combined file) for offline analysis.
+Saves parquet + JSON to a directory of your choice.
 
 Usage:
-    python examples/spdr_etfs.py
-
-    (from Docker):
-    docker exec -w /app docker-pytvtools-1 python examples/spdr_etfs.py
+    python scripts/spdr_etfs.py ./spdr_data
+    docker exec -w /app docker-pytvtools-1 python scripts/spdr_etfs.py /app/spdr_data
 """
 
+import argparse
 import asyncio
 import logging
 import sys
@@ -29,8 +28,7 @@ MAX_CONCURRENT = 5
 SYMBOLS = list(SPDR_ALL)
 
 
-async def main() -> None:
-    outdir = Path(__file__).parent / "_output" / "spdr"
+async def main(outdir: Path) -> None:
     outdir.mkdir(parents=True, exist_ok=True)
 
     print(f"Watchlist: {SPDR_ALL.name} ({len(SYMBOLS)} symbols)")
@@ -69,4 +67,7 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description="Fetch SPDR ETF daily history")
+    parser.add_argument("outdir", type=Path, help="Output directory for parquet + JSON files")
+    args = parser.parse_args()
+    asyncio.run(main(args.outdir))
