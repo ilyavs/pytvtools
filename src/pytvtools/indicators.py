@@ -3,6 +3,10 @@
 All functions accept either a flat list of floats (``close_prices``)
 or a list of OHLCV bar dicts with at least a ``"close"`` key.
 
+Volume-based indicators (MFI, etc.) require dict bars with
+``"high"``, ``"low"``, ``"close"``, ``"volume"`` and raise
+``ValueError`` if given flat floats.
+
 Usage::
 
     from pytvtools.indicators import rsi
