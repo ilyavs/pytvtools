@@ -166,6 +166,173 @@ def mfi(data: list[float] | list[dict[str, Any]], period: int = 14) -> list[floa
     return result
 
 
+def _auto_tick_size(prices: list[float]) -> float:
+    """Auto-detect a reasonable tick size from price levels.
+
+    Returns the tick increment that is standard for the given price
+    range (mimics TradingView's symbol-aware tick sizing).
+    """
+    if not prices:
+        return 1.0
+    avg = sum(prices) / len(prices)
+    if avg < 0.01:
+        return 0.00001
+    if avg < 0.1:
+        return 0.0001
+    if avg < 1:
+        return 0.001
+    if avg < 10:
+        return 0.01
+    if avg < 100:
+        return 0.05
+    if avg < 1000:
+        return 0.5
+    if avg < 10000:
+        return 1.0
+    if avg < 100000:
+        return 5.0
+    return 10.0
+
+
+def _pvp_period(
+    bars: list[dict[str, Any]],
+    rows: int,
+    tick_size: float,
+) -> dict | None:
+    """Compute POC for a single period's bars.
+
+    Returns ``{"poc": float, "start_ts": int, "end_ts": int}``
+    or ``None`` when no volume exists.
+    """
+    lows = [float(b["low"]) for b in bars]
+    highs = [float(b["high"]) for b in bars]
+    min_price = min(lows)
+    max_price = max(highs)
+    start_ts = int(bars[0]["timestamp"])
+    end_ts = int(bars[-1]["timestamp"])
+
+    if max_price == min_price:
+        return {"poc": min_price, "start_ts": start_ts, "end_ts": end_ts}
+
+    price_range = max_price - min_price
+    raw_row_size = price_range / rows
+    row_size = round(raw_row_size / tick_size) * tick_size
+    if row_size == 0:
+        row_size = tick_size
+
+    actual_rows = int(price_range / row_size) + 1
+    row_volumes = [0.0] * actual_rows
+
+    for bar in bars:
+        bar_low = float(bar["low"])
+        bar_high = float(bar["high"])
+        volume = float(bar["volume"])
+
+        start_row = max(0, min(actual_rows - 1, int((bar_low - min_price) / row_size)))
+        end_row = max(0, min(actual_rows - 1, int((bar_high - min_price - 1e-9) / row_size)))
+
+        num_spanned = end_row - start_row + 1
+        vol_per_row = volume / num_spanned
+
+        for r in range(start_row, end_row + 1):
+            row_volumes[r] += vol_per_row
+
+    max_vol = max(row_volumes)
+    if max_vol == 0:
+        return None
+
+    poc_row = row_volumes.index(max_vol)
+    poc = min_price + (poc_row + 0.5) * row_size
+
+    return {"poc": poc, "start_ts": start_ts, "end_ts": end_ts}
+
+
+def pvp(
+    data: list[dict[str, Any]],
+    window: str = "day",
+    rows: int = 24,
+) -> list[dict]:
+    """Periodic Volume Profile — Point of Control per period.
+
+    Groups bars by *window* (``"day"``, ``"week"``, ``"month"``) with
+    automatic year-boundary resets, divides each period's price range
+    into *rows* tick-aligned buckets, distributes volume across spanned
+    rows, and returns the POC for each period with crossing detection.
+
+    Tick size is auto-detected from the price level to match
+    TradingView-like behaviour.
+
+    Returns a list of dicts sorted chronologically, one per period::
+
+        {"poc": float, "start_ts": int, "end_ts": int, "crossed_ts": int | None}
+
+    ``crossed_ts`` is the timestamp of the first *subsequent* bar (any
+    future period) whose body crosses the POC level (open above & close
+    below, or open below & close above).  ``None`` if not crossed within
+    the data.
+
+    Requires dict bars with ``"high"``, ``"low"``, ``"close"``,
+    ``"volume"``, ``"timestamp"`` keys.
+    """
+    if not data:
+        return []
+
+    if not isinstance(data[0], dict):
+        raise ValueError(
+            "pvp() requires OHLCV bar dicts with 'high', 'low', 'close', "
+            "'volume', 'timestamp' keys. A flat list of closes is not sufficient."
+        )
+
+    from datetime import datetime, timezone
+    from collections import OrderedDict
+
+    # Auto-detect tick size
+    all_prices: list[float] = []
+    for bar in data:
+        all_prices.append(float(bar["high"]))
+        all_prices.append(float(bar["low"]))
+    tick_size = _auto_tick_size(all_prices)
+
+    def _period_key(ts: int) -> tuple:
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+        if window == "day":
+            return (dt.year, dt.month, dt.day)
+        if window == "week":
+            yr, wk, _ = dt.isocalendar()
+            return (yr, wk)
+        if window == "month":
+            return (dt.year, dt.month)
+        raise ValueError(f"Unknown window: {window!r} (use 'day', 'week', or 'month')")
+
+    groups: OrderedDict[tuple, list[dict]] = OrderedDict()
+    for bar in data:
+        key = _period_key(int(bar["timestamp"]))
+        groups.setdefault(key, []).append(bar)
+
+    periods: list[dict] = []
+    for key, bars in groups.items():
+        result = _pvp_period(bars, rows, tick_size)
+        if result is not None:
+            periods.append(result)
+
+    for period in periods:
+        poc = period["poc"]
+        start_ts = period["start_ts"]
+        crossed: int | None = None
+        for bar in data:
+            ts = int(bar["timestamp"])
+            if ts <= start_ts:
+                continue
+            o = float(bar.get("open", 0))
+            c = float(bar["close"])
+            if (o > poc > c) or (o < poc < c):
+                crossed = ts
+                break
+        period["crossed_ts"] = crossed
+
+    return periods
+
+
 def macd(
     data: list[float] | list[dict[str, Any]],
     fast: int = 12,
