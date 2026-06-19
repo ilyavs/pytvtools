@@ -837,6 +837,7 @@ class TestAuth:
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
             False,                    # is_logged_in
+            None, None,               # _close_dialogs (body.click, close buttons)
             None,                     # navigate to sign-in
             "https://www.tradingview.com/chart/",  # URL poll — redirected
             {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "BTCUSD"},
@@ -850,10 +851,11 @@ class TestAuth:
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
             False,
+            None, None,               # _close_dialogs
             None,
-            "https://www.tradingview.com/accounts/sign-in/",
-            "https://www.tradingview.com/accounts/sign-in/",
-            "https://www.tradingview.com/accounts/sign-in/",
+            "https://www.tradingview.com/accounts/signin/",
+            "https://www.tradingview.com/accounts/signin/",
+            "https://www.tradingview.com/accounts/signin/",
         ]
         result = await tv.login(timeout=2)
         assert result["success"] is False
@@ -924,6 +926,27 @@ class TestAuth:
         ]
         result = await tv.logout()
         assert result["success"] is True
+
+    async def test_logout_avatar_not_found(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            True,   # is_logged_in
+            False,  # avatar click failed
+        ]
+        result = await tv.logout()
+        assert result["success"] is False
+        assert "avatar" in result["error"]
+
+    async def test_logout_signout_not_found(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            True,   # is_logged_in
+            True,   # avatar click
+            False,  # sign out click failed
+        ]
+        result = await tv.logout()
+        assert result["success"] is False
+        assert "Sign Out" in result["error"]
 
     async def test_logout_url_unchanged(self, mock_cdp):
         tv, cdp = mock_cdp

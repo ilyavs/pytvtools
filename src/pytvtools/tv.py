@@ -774,28 +774,17 @@ class TV:
                 );
                 if (el && el.offsetParent !== null) return true;
             } catch(e) {}
-            // Check cookies
+            // On the chart page: profile buttons only when logged in
             try {
-                var c = document.cookie;
-                if (c.indexOf('sessionid') >= 0 || c.indexOf('tv_') >= 0) return true;
-            } catch(e) {}
-            // On the chart page: "Publish" button only when logged in, "Sign in" when not
-            try {
-                var has_signin = false, has_publish = false, has_trade = false;
+                var has_signin = false, has_profile = false;
                 var btns = document.querySelectorAll('button');
                 for (var i = 0; i < btns.length; i++) {
                     var t = btns[i].textContent.trim().toLowerCase();
                     if (t === 'sign in' || t === 'log in') has_signin = true;
-                    if (t === 'publish') has_publish = true;
-                    if (t === 'trade') has_trade = true;
+                    if (t === 'publish') has_profile = true;
                 }
-                if (has_publish || has_trade) return true;
-                if (!has_signin) {
-                    // On the chart page, absence of sign-in + presence of chart buttons
-                    // means logged in. Check we're on a chart-like page.
-                    var chartEl = document.querySelector('[class*="chart" i]');
-                    if (chartEl) return true;
-                }
+                if (has_profile) return true;
+                if (!has_signin && document.querySelector('[class*="chart" i]')) return true;
             } catch(e) {}
             return false;
         })()
@@ -838,11 +827,12 @@ class TV:
 
         if username and password:
             try:
-                return await self._programmatic_login(username, password, timeout)
+                return await self._login_programmatic(username, password, timeout)
             except Exception:
                 return {"success": False, "error": "Login failed — check credentials or try manual mode"}
 
         # Manual mode — navigate and wait
+        await self._close_dialogs()
         await self._eval("window.location.href = 'https://www.tradingview.com/accounts/signin/'")
         start = asyncio.get_running_loop().time()
         while asyncio.get_running_loop().time() - start < timeout:
@@ -856,7 +846,7 @@ class TV:
             await asyncio.sleep(1)
         return {"success": False, "error": "Login timed out — did not detect redirect back to chart"}
 
-    async def _programmatic_login(
+    async def _login_programmatic(
         self, username: str, password: str, timeout: float
     ) -> dict[str, Any]:
         """Fill the sign-in form and submit. Handles one-step and two-step flows."""
@@ -914,13 +904,13 @@ class TV:
         """)
 
         if not has_pw:
-            # Two-step — click Continue / Next
+            # Two-step — click Continue / Next (NOT "Sign in" — that submits early)
             await self._eval("""
             (function() {
                 var btns = document.querySelectorAll('button');
                 for (var i = 0; i < btns.length; i++) {
                     var t = btns[i].textContent.trim().toLowerCase();
-                    if (t === 'continue' || t === 'next' || t === 'sign in') {
+                    if (t === 'continue' || t === 'next') {
                         btns[i].click(); return true;
                     }
                 }
@@ -996,7 +986,7 @@ class TV:
             return {"success": True, "already_logged_out": True}
 
         # Click the user avatar / profile button in the header
-        await self._eval("""
+        avatar_clicked = await self._eval("""
         (function() {
             var targets = document.querySelectorAll(
                 '[data-name="header-user-profile"], ' +
@@ -1010,7 +1000,6 @@ class TV:
                     return true;
                 }
             }
-            // Fallback: look for any button with an avatar image
             var imgs = document.querySelectorAll('img[class*="avatar"], img[class*="user"]');
             for (var i = 0; i < imgs.length; i++) {
                 var btn = imgs[i].closest('button');
@@ -1019,10 +1008,12 @@ class TV:
             return false;
         })()
         """)
+        if not avatar_clicked:
+            return {"success": False, "error": "Could not find user avatar button"}
         await asyncio.sleep(0.5)
 
         # Click "Sign Out" in the dropdown menu
-        await self._eval("""
+        signout_clicked = await self._eval("""
         (function() {
             var items = document.querySelectorAll(
                 '[role="menuitem"], [role="option"], ' +
@@ -1035,7 +1026,6 @@ class TV:
                     return true;
                 }
             }
-            // Fallback: look within visible dropdown/menu containers
             var containers = document.querySelectorAll(
                 '[role="menu"], [role="listbox"], [class*="dropdown"], ' +
                 '[class*="popup"], [class*="menu"]'
@@ -1053,6 +1043,8 @@ class TV:
             return false;
         })()
         """)
+        if not signout_clicked:
+            return {"success": False, "error": "Could not find 'Sign Out' in the user menu"}
 
         # Wait for redirect away from chart
         start = asyncio.get_running_loop().time()
@@ -1061,7 +1053,7 @@ class TV:
             if url and "/chart/" not in url:
                 return {"success": True}
             await asyncio.sleep(1)
-        return {"success": True, "note": "Logout clicked, but URL did not change"}
+        return {"success": True, "note": "Sign Out clicked, but URL did not change"}
 
     async def set_indicator_inputs(
         self, entity_id: str, inputs: dict[str, Any]
