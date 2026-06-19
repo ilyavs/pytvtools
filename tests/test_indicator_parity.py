@@ -36,6 +36,7 @@ SAMPLE_RSI_DATA = {
 def mock_tv():
     tv = AsyncMock(spec=TV)
     tv.get_ohlcv = AsyncMock(return_value=SAMPLE_BARS)
+    tv._eval = AsyncMock(return_value=None)
     return tv
 
 
@@ -55,9 +56,13 @@ class TestCompareIndicator:
         assert report.total_bars > 0
 
     async def test_no_data_raises(self, mock_tv):
-        mock_tv.get_ohlcv = AsyncMock(return_value=[])
         mock_tv.set_symbol = AsyncMock()
         mock_tv.set_timeframe = AsyncMock()
+        mock_tv.add_indicator = AsyncMock(return_value="abc123")
+        mock_tv.get_indicator_data = AsyncMock(return_value={
+            "count": 100, "plots": [{"title": "RSI", "values": [{"timestamp": 1600000000, "value": 50.0}]}],
+        })
+        mock_tv.get_ohlcv = AsyncMock(return_value=[])
 
         with pytest.raises(ValueError, match="No OHLCV data"):
             await compare_indicator(mock_tv, "TEST", "1D", "STD;RSI")

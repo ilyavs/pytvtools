@@ -15,11 +15,13 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from typing import Any
 
 from pytvtools.indicators import rsi, sma, ema, macd, mfi
 from pytvtools.tv import TV
+from pytvtools.tvdata import TVData
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,26 @@ _BUILTIN_COMPUTERS: dict[str, Any] = {
     "STD;MACD": macd,
     "STD;Money_Flow": mfi,
 }
+
+# Maps TV internal input IDs (in_0, in_1, …) to Python function parameter names
+_TV_INPUT_MAP: dict[str, dict[str, str]] = {
+    "STD;RSI": {"in_0": "period"},
+    "STD;SMA": {"in_0": "period"},
+    "STD;EMA": {"in_0": "period"},
+    "STD;MACD": {"in_1": "fast", "in_2": "slow", "in_3": "signal"},
+    "STD;Money_Flow": {"in_0": "period"},
+}
+
+_JS_GET_STUDY_INPUTS: str = """
+(function() {
+    var study = TradingViewApi.chart().getStudyById(__EID__);
+    if (!study) return null;
+    var vals = study.getInputValues ? study.getInputValues() : [];
+    var r = {};
+    vals.forEach(function(v) { r[v.id] = v.value; });
+    return r;
+})()
+"""
 
 # Convenience aliases → canonical TV study ID
 _STUDY_ID_ALIASES: dict[str, str] = {
@@ -151,18 +173,6 @@ async def compare_indicator(
     await tv.set_timeframe(timeframe)
     await tv.wait_for_chart_ready(timeout=10)
 
-    # Fetch ALL bars so timestamps align with the indicator data source
-    # (both use midnight UTC when no count limit is applied).
-    bars = await tv.get_ohlcv(summary=False)
-    if not bars:
-        raise ValueError(f"No OHLCV data returned for {symbol} {timeframe}")
-
-    # If max_bars is set, trim to the most recent bars
-    if max_bars is not None and len(bars) > max_bars:
-        bars = bars[-max_bars:]
-
-    timestamps = [b["timestamp"] for b in bars]
-
     computer = _detect_computer(indicator)
     if computer is None:
         available = ", ".join(_BUILTIN_COMPUTERS)
@@ -171,14 +181,26 @@ async def compare_indicator(
             f"Available: {available}"
         )
 
-    py_values = computer(bars)  # type: ignore[operator]
+    study_id = _resolve_study_id(indicator)
 
     if entity_id is None:
-        study_id = _resolve_study_id(indicator)
         eid = await tv.add_indicator(study_id)
         if eid is None:
             raise RuntimeError(f"Failed to add indicator {indicator}")
         entity_id = eid
+
+    # Read TV's actual input values so Python computation matches exactly.
+    py_kwargs: dict[str, Any] = {}
+    if study_id in _TV_INPUT_MAP:
+        js = _JS_GET_STUDY_INPUTS.replace("__EID__", repr(entity_id))
+        tv_raw_inputs = await tv._eval(js)
+        if tv_raw_inputs:
+            local_map = _TV_INPUT_MAP[study_id]
+            sig = inspect.signature(computer)
+            for tv_id, py_name in local_map.items():
+                val = tv_raw_inputs.get(tv_id)
+                if val is not None and py_name in sig.parameters:
+                    py_kwargs[py_name] = val
 
     for _ in range(15):
         tv_data = await tv.get_indicator_data(entity_id)
@@ -201,6 +223,40 @@ async def compare_indicator(
     for entry in plots[plot_index]["values"]:
         tv_values_by_ts[int(entry["timestamp"])] = entry["value"]
 
+    tv_count = tv_data.get("count", 0)
+    tv_first_ts = int(plots[plot_index]["values"][0]["timestamp"]) if plots[plot_index].get("values") else 0
+
+    bars = await tv.get_ohlcv(summary=False)
+    if not bars:
+        raise ValueError(f"No OHLCV data returned for {symbol} {timeframe}")
+
+    cdp_first_ts = int(bars[0]["timestamp"])
+
+    # If TV has data before our CDP bars, the indicator was computed
+    # from a longer price history. Fetch extra bars via TVData so Python
+    # calculations converge with TV's (especially for Wilder's/EMA-based
+    # indicators like RSI that carry historical context).
+    if cdp_first_ts > tv_first_ts:
+        extra_needed = tv_count * 2
+        async with TVData() as tvdata:
+            all_bars = await tvdata.get_ohlcv(symbol, timeframe, extra_needed)
+        if len(all_bars) > len(bars):
+            bars = all_bars
+
+    if max_bars is not None:
+        skip = max(0, len(bars) - max_bars)
+        bars = bars[-max_bars:] if skip > 0 else bars
+
+    timestamps = [b["timestamp"] for b in bars]
+    raw = computer(bars, **py_kwargs)
+    if isinstance(raw, dict):
+        macd_key_map = {"Histogram": "histogram", "MACD": "macd", "Signal": "signal"}
+        tv_plot_name = plots[plot_index]["name"] if plot_index < len(plots) else ""
+        py_key = macd_key_map.get(tv_plot_name, list(raw.keys())[plot_index] if plot_index < len(raw) else list(raw.keys())[0])
+        py_values = raw[py_key]
+    else:
+        py_values = raw
+
     mismatches: list[Mismatch] = []
     matched = 0
 
@@ -209,7 +265,7 @@ async def compare_indicator(
         min_idx += 1
 
     for i in range(min_idx, len(bars)):
-        ts = timestamps[i]
+        ts = int(timestamps[i])
         py_val = py_values[i]
         tv_val = tv_values_by_ts.get(ts)
 
