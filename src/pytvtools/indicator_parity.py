@@ -18,7 +18,7 @@ import asyncio
 import logging
 from typing import Any
 
-from pytvtools.indicators import rsi, sma, ema, mfi
+from pytvtools.indicators import rsi, sma, ema, macd, mfi
 from pytvtools.tv import TV
 
 logger = logging.getLogger(__name__)
@@ -28,11 +28,16 @@ _BUILTIN_COMPUTERS: dict[str, Any] = {
     "STD;RSI": rsi,
     "STD;SMA": sma,
     "STD;EMA": ema,
+    "STD;MACD": macd,
     "STD;Money_Flow": mfi,
 }
 
 # Convenience aliases → canonical TV study ID
 _STUDY_ID_ALIASES: dict[str, str] = {
+    "RSI": "STD;RSI",
+    "SMA": "STD;SMA",
+    "EMA": "STD;EMA",
+    "MACD": "STD;MACD",
     "STD;MFI": "STD;Money_Flow",
     "MFI": "STD;Money_Flow",
 }

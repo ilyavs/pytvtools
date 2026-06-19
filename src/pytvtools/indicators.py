@@ -317,11 +317,11 @@ def pvp(
 
     for period in periods:
         poc = period["poc"]
-        start_ts = period["start_ts"]
+        end_ts = period["end_ts"]
         crossed: int | None = None
         for bar in data:
             ts = int(bar["timestamp"])
-            if ts <= start_ts:
+            if ts <= end_ts:
                 continue
             o = float(bar.get("open", 0))
             c = float(bar["close"])
