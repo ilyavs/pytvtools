@@ -44,8 +44,20 @@ async with TVData() as d:
     multi = await d.get_ohlcv_multi(["NASDAQ:AAPL", "BINANCE:BTCUSDT"], "1D", 100)
 ```
 
+### Authentication
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `is_logged_in()` | `bool` | Check if currently logged in to a TradingView account |
+| `login(username=None, password=None, timeout=120)` | `dict` | Log in — programmatic (pass creds) or manual (omit creds, opens sign-in page for you) |
+| `logout(timeout=10)` | `dict` | Sign out via the user avatar menu |
+
 ## All TV methods
 
+- `is_logged_in()` → `bool`
+- `login(timeout=120)` → `dict`
+- `login(username, password, timeout=120)` → `dict`
+- `logout(timeout=10)` → `dict`
 - `get_state()` → `{symbol, timeframe, chartType}`
 - `set_symbol(symbol, timeout=10, wait_data=True)` — `wait_data=False` skips chart-ready check
 - `set_timeframe(tf)` — "D", "60", "15", etc.
@@ -88,6 +100,15 @@ async with TVData() as d:
 
 Registers all TV methods as MCP tools. Runs **on the host** (not in Docker)
 and connects to Chrome at `localhost:9222` (Docker port mapping).
+
+### Credential resolution
+
+The ``login`` MCP tool resolves credentials in this order:
+
+1. **Config file** — ``~/.tv/config`` (or ``$TV_CONFIG_PATH``) with a
+   ``username`` and ``password`` key, e.g. ``{"username": "…", "password": "…"}``.
+2. **Environment variables** — ``TV_USERNAME`` and ``TV_PASSWORD``.
+3. **Manual mode** — navigates to the sign-in page and waits for you to type.
 
 ## TradingView JS API reference (CDP context)
 

@@ -802,6 +802,145 @@ class TestReplay:
         assert result["success"] is False
 
 
+class TestAuth:
+    """Authentication: is_logged_in, login, logout."""
+
+    async def test_is_logged_in_true(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.return_value = True
+        result = await tv.is_logged_in()
+        assert result is True
+
+    async def test_is_logged_in_false(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.return_value = False
+        result = await tv.is_logged_in()
+        assert result is False
+
+    async def test_is_logged_in_checks_avatar(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.return_value = True
+        result = await tv.is_logged_in()
+        assert result is True
+        expr = cdp.evaluate.call_args[0][0]
+        assert "header-user-profile" in expr
+        assert "TradingViewApi._user" in expr
+
+    async def test_login_already_logged_in(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.return_value = True  # is_logged_in
+        result = await tv.login()
+        assert result["success"] is True
+        assert result["already_logged_in"] is True
+
+    async def test_login_manual_waits_for_redirect(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            False,                    # is_logged_in
+            None,                     # navigate to sign-in
+            "https://www.tradingview.com/chart/",  # URL poll — redirected
+            {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "BTCUSD"},
+            {"isLoading": False, "domBarCount": 100, "modelBars": 501, "validBars": 501, "currentSymbol": "BTCUSD"},
+            {"isLoading": False, "domBarCount": 100, "modelBars": 501, "validBars": 501, "currentSymbol": "BTCUSD"},
+        ]
+        result = await tv.login()
+        assert result["success"] is True
+
+    async def test_login_manual_timeout(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            False,
+            None,
+            "https://www.tradingview.com/accounts/sign-in/",
+            "https://www.tradingview.com/accounts/sign-in/",
+            "https://www.tradingview.com/accounts/sign-in/",
+        ]
+        result = await tv.login(timeout=2)
+        assert result["success"] is False
+        assert "timed out" in result["error"]
+
+    async def test_login_programmatic_fills_and_submits(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            False,                    # is_logged_in
+            None,                     # navigate
+            True,                     # email input found
+            True,                     # fill email
+            True,                     # has_password (one-step)
+            True,                     # fill password
+            True,                     # click sign in
+            "https://www.tradingview.com/chart/",
+            {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "AAPL"},
+            {"isLoading": False, "domBarCount": 100, "modelBars": 501, "validBars": 501, "currentSymbol": "AAPL"},
+            {"isLoading": False, "domBarCount": 100, "modelBars": 501, "validBars": 501, "currentSymbol": "AAPL"},
+        ]
+        result = await tv.login(username="u@e.com", password="pass")
+        assert result["success"] is True
+
+    async def test_login_programmatic_two_step(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            False,
+            None,
+            True,                     # email found
+            True,                     # fill email
+            False,                    # no password → two-step
+            True,                     # click continue
+            True,                     # fill password
+            True,                     # click sign in
+            "https://www.tradingview.com/chart/",
+            {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "AAPL"},
+            {"isLoading": False, "domBarCount": 100, "modelBars": 501, "validBars": 501, "currentSymbol": "AAPL"},
+            {"isLoading": False, "domBarCount": 100, "modelBars": 501, "validBars": 501, "currentSymbol": "AAPL"},
+        ]
+        result = await tv.login(username="u@e.com", password="pass")
+        assert result["success"] is True
+
+    async def test_login_programmatic_form_timeout(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            False,
+            None,
+            False, False, False,       # email not found
+        ]
+        result = await tv.login(username="u@e.com", password="pass", timeout=1.5)
+        assert result["success"] is False
+        assert "form did not load" in result["error"]
+
+    async def test_logout_already_logged_out(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.return_value = False  # not logged in
+        result = await tv.logout()
+        assert result["success"] is True
+        assert result["already_logged_out"] is True
+
+    async def test_logout_clicks_sign_out(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            True,                           # is_logged_in
+            True,                           # click avatar
+            True,                           # click sign out
+            "https://www.tradingview.com/", # URL after logout
+        ]
+        result = await tv.logout()
+        assert result["success"] is True
+
+    async def test_logout_url_unchanged(self, mock_cdp):
+        tv, cdp = mock_cdp
+        cdp.evaluate.side_effect = [
+            True,                           # is_logged_in
+            True,                           # click avatar
+            True,                           # click sign out
+            "https://www.tradingview.com/chart/",  # URL poll 1
+            "https://www.tradingview.com/chart/",  # URL poll 2
+            "https://www.tradingview.com/chart/",  # URL poll 3
+            "https://www.tradingview.com/chart/",  # URL poll 4
+        ]
+        result = await tv.logout(timeout=2)
+        assert result["success"] is True
+        assert "note" in result
+
+
 class TestPineSourceCaching:
     """get_pine_source caching behavior."""
 

@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sys
+from pathlib import Path
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -25,6 +27,30 @@ except ImportError:
 from pytvtools import TV, TVData, wait_for_cdp
 
 server = Server("pytvtools")
+
+# --------------------------------------------------------------------------
+# Credential resolution
+# --------------------------------------------------------------------------
+
+def _resolve_credentials() -> dict[str, str] | None:
+    """Try config file, then env vars. Returns ``{username, password}`` or ``None``."""
+    config_path = os.environ.get("TV_CONFIG_PATH", str(Path.home() / ".tv" / "config"))
+    try:
+        with open(config_path) as f:
+            cfg = json.load(f)
+        u = cfg.get("username", "")
+        p = cfg.get("password", "")
+        if u and p:
+            return {"username": u, "password": p}
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+
+    u = os.environ.get("TV_USERNAME", "")
+    p = os.environ.get("TV_PASSWORD", "")
+    if u and p:
+        return {"username": u, "password": p}
+
+    return None
 
 
 @server.list_tools()
@@ -288,6 +314,26 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        Tool(
+            name="is_logged_in",
+            description="Check if currently logged in to TradingView.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="login",
+            description="Log in to TradingView. Uses credentials_command from ~/.tv/config, or TV_USERNAME/TV_PASSWORD env vars, or falls back to manual mode (opens sign-in page for you to type).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "timeout": {"type": "number", "description": "Max seconds to wait (default 120)"},
+                },
+            },
+        ),
+        Tool(
+            name="logout",
+            description="Log out of the current TradingView account.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
     ]
 
 
@@ -389,6 +435,20 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 result = await tv.replay_status()
             elif name == "replay_step":
                 result = await tv.replay_step()
+            elif name == "is_logged_in":
+                result = {"logged_in": await tv.is_logged_in()}
+            elif name == "login":
+                creds = _resolve_credentials()
+                if creds:
+                    result = await tv.login(
+                        username=creds["username"],
+                        password=creds["password"],
+                        timeout=arguments.get("timeout", 120),
+                    )
+                else:
+                    result = await tv.login(timeout=arguments.get("timeout", 120))
+            elif name == "logout":
+                result = await tv.logout()
             elif name == "replay_autoplay":
                 result = await tv.replay_autoplay(speed=arguments.get("speed", 0))
             else:

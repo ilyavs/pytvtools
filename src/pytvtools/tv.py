@@ -752,6 +752,317 @@ class TV:
         await asyncio.sleep(1)
         await self._close_dialogs()
 
+    # ------------------------------------------------------------------
+    # Authentication
+    # ------------------------------------------------------------------
+
+    async def is_logged_in(self) -> bool:
+        """Check if currently logged in to a TradingView account."""
+        result = await self._eval("""
+        (function() {
+            // Check TradingView internal user object
+            try {
+                var user = window.TradingViewApi && window.TradingViewApi._user;
+                if (user && user.id) return true;
+            } catch(e) {}
+            // Check for user avatar / profile element
+            try {
+                var el = document.querySelector(
+                    '[data-name="header-user-profile"], ' +
+                    '[class*="userMenu"], ' +
+                    '[class*="avatar"]'
+                );
+                if (el && el.offsetParent !== null) return true;
+            } catch(e) {}
+            // Check cookies
+            try {
+                var c = document.cookie;
+                if (c.indexOf('sessionid') >= 0 || c.indexOf('tv_') >= 0) return true;
+            } catch(e) {}
+            // On the chart page: "Publish" button only when logged in, "Sign in" when not
+            try {
+                var has_signin = false, has_publish = false, has_trade = false;
+                var btns = document.querySelectorAll('button');
+                for (var i = 0; i < btns.length; i++) {
+                    var t = btns[i].textContent.trim().toLowerCase();
+                    if (t === 'sign in' || t === 'log in') has_signin = true;
+                    if (t === 'publish') has_publish = true;
+                    if (t === 'trade') has_trade = true;
+                }
+                if (has_publish || has_trade) return true;
+                if (!has_signin) {
+                    // On the chart page, absence of sign-in + presence of chart buttons
+                    // means logged in. Check we're on a chart-like page.
+                    var chartEl = document.querySelector('[class*="chart" i]');
+                    if (chartEl) return true;
+                }
+            } catch(e) {}
+            return false;
+        })()
+        """)
+        return bool(result)
+
+    async def login(
+        self,
+        username: str | None = None,
+        password: str | None = None,
+        timeout: float = 120,
+    ) -> dict[str, Any]:
+        """Log in to a TradingView account.
+
+        Two modes:
+
+        * **Manual** (no arguments) — navigates to the sign-in page and waits
+          for you to type your credentials in the browser.
+        * **Programmatic** (with ``username`` + ``password``) — fills the form
+          via CDP and submits.  Handles both one-step and two-step forms.
+
+        Parameters
+        ----------
+        username : str or None
+            Email or username.  Omit for manual mode.
+        password : str or None
+            Account password.  Omit for manual mode.
+        timeout : float
+            Maximum seconds to wait (default 120).
+
+        Returns
+        -------
+        dict
+            Keys: ``success``, ``already_logged_in``, or ``error``.
+        """
+        import asyncio
+
+        if await self.is_logged_in():
+            return {"success": True, "already_logged_in": True}
+
+        if username and password:
+            try:
+                return await self._programmatic_login(username, password, timeout)
+            except Exception:
+                return {"success": False, "error": "Login failed — check credentials or try manual mode"}
+
+        # Manual mode — navigate and wait
+        await self._eval("window.location.href = 'https://www.tradingview.com/accounts/signin/'")
+        start = asyncio.get_running_loop().time()
+        while asyncio.get_running_loop().time() - start < timeout:
+            url = await self._eval("window.location.href")
+            if url and "/chart/" in url:
+                ready = await self.wait_for_chart_ready(
+                    timeout=max(timeout - (asyncio.get_running_loop().time() - start), 5)
+                )
+                if ready:
+                    return {"success": True}
+            await asyncio.sleep(1)
+        return {"success": False, "error": "Login timed out — did not detect redirect back to chart"}
+
+    async def _programmatic_login(
+        self, username: str, password: str, timeout: float
+    ) -> dict[str, Any]:
+        """Fill the sign-in form and submit. Handles one-step and two-step flows."""
+        import asyncio
+
+        await self._eval("window.location.href = 'https://www.tradingview.com/accounts/signin/'")
+
+        # Wait for the email input
+        for _ in range(int(timeout / 0.5)):
+            has_email = await self._eval("""
+            (function() {
+                var el = document.querySelector(
+                    'input[name="email"], input[type="email"], ' +
+                    'input[name="username"], input[name="id_username"], ' +
+                    'input[autocomplete="username"]'
+                );
+                return !!el;
+            })()
+            """)
+            if has_email:
+                break
+            await asyncio.sleep(0.5)
+        else:
+            return {"success": False, "error": "Sign-in form did not load within timeout"}
+
+        # Fill email
+        await self._eval(f"""
+        (function() {{
+            var input = document.querySelector(
+                'input[name="email"], input[type="email"], ' +
+                'input[name="username"], input[name="id_username"], ' +
+                'input[autocomplete="username"]'
+            );
+            if (!input) return false;
+            var setter = Object.getOwnPropertyDescriptor(
+                window.HTMLInputElement.prototype, 'value'
+            ).set;
+            setter.call(input, {_js_str(username)});
+            input.dispatchEvent(new Event('input', {{bubbles: true}}));
+            input.dispatchEvent(new Event('change', {{bubbles: true}}));
+            return true;
+        }})()
+        """)
+        await asyncio.sleep(0.3)
+
+        # Check if password is already visible (one-step form)
+        has_pw = await self._eval("""
+        (function() {
+            var pw = document.querySelector(
+                'input[type="password"], input[name="password"], ' +
+                'input[name="id_password"], input[autocomplete="current-password"]'
+            );
+            return !!(pw && pw.offsetParent !== null);
+        })()
+        """)
+
+        if not has_pw:
+            # Two-step — click Continue / Next
+            await self._eval("""
+            (function() {
+                var btns = document.querySelectorAll('button');
+                for (var i = 0; i < btns.length; i++) {
+                    var t = btns[i].textContent.trim().toLowerCase();
+                    if (t === 'continue' || t === 'next' || t === 'sign in') {
+                        btns[i].click(); return true;
+                    }
+                }
+                return false;
+            })()
+            """)
+            await asyncio.sleep(1.5)
+
+        # Fill password
+        await self._eval(f"""
+        (function() {{
+            var input = document.querySelector(
+                'input[type="password"], input[name="password"], ' +
+                'input[name="id_password"], input[autocomplete="current-password"]'
+            );
+            if (!input) return false;
+            var setter = Object.getOwnPropertyDescriptor(
+                window.HTMLInputElement.prototype, 'value'
+            ).set;
+            setter.call(input, {_js_str(password)});
+            input.dispatchEvent(new Event('input', {{bubbles: true}}));
+            input.dispatchEvent(new Event('change', {{bubbles: true}}));
+            return true;
+        }})()
+        """)
+        await asyncio.sleep(0.3)
+
+        # Click Sign In
+        await self._eval("""
+        (function() {
+            var btns = document.querySelectorAll('button');
+            for (var i = 0; i < btns.length; i++) {
+                var t = btns[i].textContent.trim().toLowerCase();
+                if (t === 'sign in' || t === 'log in') {
+                    btns[i].click(); return true;
+                }
+            }
+            return false;
+        })()
+        """)
+
+        # Wait for redirect to chart
+        start = asyncio.get_running_loop().time()
+        while asyncio.get_running_loop().time() - start < timeout:
+            url = await self._eval("window.location.href")
+            if url and "/chart/" in url:
+                ready = await self.wait_for_chart_ready(
+                    timeout=max(timeout - (asyncio.get_running_loop().time() - start), 5)
+                )
+                if ready:
+                    return {"success": True}
+            await asyncio.sleep(1)
+        return {"success": False, "error": "Login timed out — did not redirect to chart"}
+
+    async def logout(self, timeout: float = 10) -> dict[str, Any]:
+        """Log out of the current TradingView account.
+
+        Clicks the user avatar menu and selects "Sign Out".
+
+        Parameters
+        ----------
+        timeout : float
+            Maximum seconds to wait for logout to complete.
+
+        Returns
+        -------
+        dict
+            Keys: ``success``, ``already_logged_out``, or ``error``.
+        """
+        import asyncio
+
+        if not await self.is_logged_in():
+            return {"success": True, "already_logged_out": True}
+
+        # Click the user avatar / profile button in the header
+        await self._eval("""
+        (function() {
+            var targets = document.querySelectorAll(
+                '[data-name="header-user-profile"], ' +
+                'button[class*="avatar"], ' +
+                'button[class*="userMenu"], ' +
+                '[class*="userWidget"]'
+            );
+            for (var i = 0; i < targets.length; i++) {
+                if (targets[i].offsetParent !== null) {
+                    targets[i].click();
+                    return true;
+                }
+            }
+            // Fallback: look for any button with an avatar image
+            var imgs = document.querySelectorAll('img[class*="avatar"], img[class*="user"]');
+            for (var i = 0; i < imgs.length; i++) {
+                var btn = imgs[i].closest('button');
+                if (btn) { btn.click(); return true; }
+            }
+            return false;
+        })()
+        """)
+        await asyncio.sleep(0.5)
+
+        # Click "Sign Out" in the dropdown menu
+        await self._eval("""
+        (function() {
+            var items = document.querySelectorAll(
+                '[role="menuitem"], [role="option"], ' +
+                'div[class*="menuItem"], a[class*="menuItem"]'
+            );
+            for (var i = 0; i < items.length; i++) {
+                var t = items[i].textContent.trim().toLowerCase();
+                if (t === 'sign out') {
+                    items[i].click();
+                    return true;
+                }
+            }
+            // Fallback: look within visible dropdown/menu containers
+            var containers = document.querySelectorAll(
+                '[role="menu"], [role="listbox"], [class*="dropdown"], ' +
+                '[class*="popup"], [class*="menu"]'
+            );
+            for (var c = 0; c < containers.length; c++) {
+                if (containers[c].offsetParent === null) continue;
+                var items = containers[c].querySelectorAll('li, a, div, button');
+                for (var i = 0; i < items.length; i++) {
+                    if (items[i].textContent.trim().toLowerCase() === 'sign out') {
+                        items[i].click();
+                        return true;
+                    }
+                }
+            }
+            return false;
+        })()
+        """)
+
+        # Wait for redirect away from chart
+        start = asyncio.get_running_loop().time()
+        while asyncio.get_running_loop().time() - start < timeout:
+            url = await self._eval("window.location.href")
+            if url and "/chart/" not in url:
+                return {"success": True}
+            await asyncio.sleep(1)
+        return {"success": True, "note": "Logout clicked, but URL did not change"}
+
     async def set_indicator_inputs(
         self, entity_id: str, inputs: dict[str, Any]
     ) -> None:
