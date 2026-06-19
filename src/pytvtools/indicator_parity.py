@@ -21,7 +21,6 @@ from typing import Any
 
 from pytvtools.indicators import rsi, sma, ema, macd, mfi
 from pytvtools.tv import TV
-from pytvtools.tvdata import TVData
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +201,21 @@ async def compare_indicator(
                 if val is not None and py_name in sig.parameters:
                     py_kwargs[py_name] = val
 
+    # Force the chart to load all available historical bars by scrolling
+    # to the first bar and zooming out.  This ensures Python's computation
+    # uses the same bar range as TV (essential for recursive indicators
+    # like EMA, Wilder's RSI, MACD).
+    await tv._eval("""
+(function() {
+    var model = TradingViewApi.chart().chartWidget().model();
+    var ts = model.timeScale();
+    ts.scrollToFirstBar();
+    ts.zoom(-1000);
+    return true;
+})()
+""")
+    await asyncio.sleep(2)
+
     for _ in range(15):
         tv_data = await tv.get_indicator_data(entity_id)
         if tv_data and tv_data.get("plots") and tv_data["count"] > 0:
@@ -221,27 +235,11 @@ async def compare_indicator(
 
     tv_values_by_ts: dict[int, float | None] = {}
     for entry in plots[plot_index]["values"]:
-        tv_values_by_ts[int(entry["timestamp"])] = entry["value"]
-
-    tv_count = tv_data.get("count", 0)
-    tv_first_ts = int(plots[plot_index]["values"][0]["timestamp"]) if plots[plot_index].get("values") else 0
+        tv_values_by_ts[int(entry["timestamp"])] = entry.get("value")
 
     bars = await tv.get_ohlcv(summary=False)
     if not bars:
         raise ValueError(f"No OHLCV data returned for {symbol} {timeframe}")
-
-    cdp_first_ts = int(bars[0]["timestamp"])
-
-    # If TV has data before our CDP bars, the indicator was computed
-    # from a longer price history. Fetch extra bars via TVData so Python
-    # calculations converge with TV's (especially for Wilder's/EMA-based
-    # indicators like RSI that carry historical context).
-    if cdp_first_ts > tv_first_ts:
-        extra_needed = tv_count * 2
-        async with TVData() as tvdata:
-            all_bars = await tvdata.get_ohlcv(symbol, timeframe, extra_needed)
-        if len(all_bars) > len(bars):
-            bars = all_bars
 
     if max_bars is not None:
         skip = max(0, len(bars) - max_bars)
