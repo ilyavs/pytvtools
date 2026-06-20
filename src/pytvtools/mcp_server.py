@@ -189,6 +189,11 @@ async def list_tools() -> list[Tool]:
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
+            name="pine_close_editor",
+            description="Close the Pine Script editor panel",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
             name="batch",
             description="Scan multiple symbols/timeframes",
             inputSchema={
@@ -408,6 +413,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 result = {"errors": await tv.pine_get_errors()}
             elif name == "pine_get_editor_source":
                 result = {"source": await tv.pine_get_editor_source()}
+            elif name == "pine_close_editor":
+                result = {"closed": await tv.pine_close_editor()}
             elif name == "batch":
                 result = await tv.batch(
                     symbols=arguments["symbols"],

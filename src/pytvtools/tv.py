@@ -1280,6 +1280,26 @@ class TV:
         }})()
         """)
 
+    async def pine_close_editor(self) -> bool:
+        """Close the Pine Script editor panel.
+
+        Clicks the ``aria-label="Close"`` button on the editor container.
+        Returns ``True`` if a close button was found and clicked.
+        """
+        return bool(await self._eval("""
+        (function() {
+            var btns = document.querySelectorAll('button');
+            for (var i = 0; i < btns.length; i++) {
+                var aria = (btns[i].getAttribute('aria-label') || '').trim().toLowerCase();
+                if (aria === 'close') {
+                    btns[i].click();
+                    return true;
+                }
+            }
+            return false;
+        })()
+        """))
+
     async def get_pine_source(
         self, study_id: str, entity_id: str | None = None
     ) -> str | None:
