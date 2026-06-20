@@ -179,6 +179,16 @@ async def list_tools() -> list[Tool]:
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
+            name="pine_get_errors",
+            description="Read Pine Script compilation errors from Monaco markers",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="pine_get_editor_source",
+            description="Read the current Pine Script source from the editor",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
             name="batch",
             description="Scan multiple symbols/timeframes",
             inputSchema={
@@ -394,6 +404,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 result = {"ok": True}
             elif name == "pine_compile":
                 result = await tv.pine_compile()
+            elif name == "pine_get_errors":
+                result = {"errors": await tv.pine_get_errors()}
+            elif name == "pine_get_editor_source":
+                result = {"source": await tv.pine_get_editor_source()}
             elif name == "batch":
                 result = await tv.batch(
                     symbols=arguments["symbols"],

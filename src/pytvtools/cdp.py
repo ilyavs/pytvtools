@@ -45,7 +45,9 @@ class CdpConnection:
         self._msg_id = 0
 
     async def connect(self) -> None:
-        self._ws = await _ws_connect(self._ws_url)
+        self._ws = await _ws_connect(
+            self._ws_url, max_size=20 * 1024 * 1024  # 20 MB for large indicator data
+        )
         await self._send("Runtime.enable")
 
     async def evaluate(

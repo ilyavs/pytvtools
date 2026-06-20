@@ -1155,81 +1155,130 @@ class TV:
     # Pine Script
     # ------------------------------------------------------------------
 
+    _FIND_MONACO: str = """
+(function() {
+    var container = document.querySelector('.monaco-editor.pine-editor-monaco');
+    if (!container) return null;
+    var el = container;
+    var fiberKey;
+    for (var i = 0; i < 20; i++) {
+        if (!el) break;
+        fiberKey = Object.keys(el).find(function(k) { return k.startsWith('__reactFiber$'); });
+        if (fiberKey) break;
+        el = el.parentElement;
+    }
+    if (!fiberKey) return null;
+    var current = el[fiberKey];
+    for (var d = 0; d < 15; d++) {
+        if (!current) break;
+        if (current.memoizedProps && current.memoizedProps.value && current.memoizedProps.value.monacoEnv) {
+            var env = current.memoizedProps.value.monacoEnv;
+            if (env.editor && typeof env.editor.getEditors === 'function') {
+                var editors = env.editor.getEditors();
+                if (editors.length > 0) return { editor: editors[0], env: env };
+            }
+        }
+        current = current.return;
+    }
+    return null;
+})()
+"""
+
     async def pine_set_source(self, source: str) -> None:
-        """Inject source into the Pine editor using CDP keyboard input.
+        """Set Pine Script source in the editor via Monaco API directly.
 
-        Uses ``Input.insertText`` at the CDP level (native OS input),
-        which Monaco handles correctly even for multi-line content.
-        The old approach (``execCommand`` / JavaScript events) could not
-        reliably set multi-line Pine source.
+        Walks the React fiber tree to find the Monaco editor instance
+        and calls ``editor.setValue()`` — the standard Monaco API.
         """
-        import asyncio
-
-        await self._eval("""
-        (function() {
-            var el = document.querySelector('.monaco-editor textarea');
-            if (!el) throw new Error('Pine editor not open');
-            el.focus();
-        })()
+        escaped = source.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
+        result = await self._eval(f"""
+        (function() {{
+            var m = {self._FIND_MONACO};
+            if (!m) throw new Error('Monaco editor not found — Pine Editor may not be open');
+            m.editor.setValue(`{escaped}`);
+            return true;
+        }})()
         """)
-        await asyncio.sleep(0.3)
-
-        # Ctrl+A (select all)
-        ctrl = 17
-        key_a = 65
-        for key, mods in [(ctrl, 0), (key_a, 2)]:
-            await self._cdp.send_command("Input.dispatchKeyEvent", {
-                "type": "rawKeyDown", "modifiers": mods,
-                "windowsVirtualKeyCode": key,
-            })
-        for key, mods in [(key_a, 2), (ctrl, 0)]:
-            await self._cdp.send_command("Input.dispatchKeyEvent", {
-                "type": "keyUp", "modifiers": mods,
-                "windowsVirtualKeyCode": key,
-            })
-
-        await asyncio.sleep(0.2)
-
-        # Delete
-        await self._cdp.send_command("Input.dispatchKeyEvent", {
-            "type": "rawKeyDown", "modifiers": 0, "windowsVirtualKeyCode": 46,
-        })
-        await self._cdp.send_command("Input.dispatchKeyEvent", {
-            "type": "keyUp", "modifiers": 0, "windowsVirtualKeyCode": 46,
-        })
-
-        await asyncio.sleep(0.2)
-
-        # Insert the full source as native text input
-        await self._cdp.send_command("Input.insertText", {"text": source})
+        if not result:
+            raise RuntimeError("Failed to set Pine Script source")
 
     async def pine_compile(self) -> dict[str, Any]:
-        """Click the compile button and return errors (if any)."""
-        await self._eval("""
+        """Click the compile button and return errors from Monaco markers."""
+        clicked = await self._eval("""
         (function() {
             var btns = document.querySelectorAll('button');
+            var fallback = null;
             for (var i = 0; i < btns.length; i++) {
-                var b = btns[i];
-                var aria = (b.getAttribute('aria-label') || '').toLowerCase();
-                var text = (b.textContent || '').trim().toLowerCase();
-                var title = (b.getAttribute('title') || '').toLowerCase();
-                if (title === 'add to chart' || aria.indexOf('compile') >= 0 || text.indexOf('add to chart') >= 0) {
-                    b.click();
-                    return;
+                var text = btns[i].textContent.trim();
+                if (/save and add to chart/i.test(text)) {
+                    btns[i].click();
+                    return 'save_and_add';
+                }
+                if (!fallback && /^(Add to chart|Update on chart)/i.test(text)) {
+                    fallback = btns[i];
                 }
             }
-            throw new Error('Compile button not found');
+            if (fallback) { fallback.click(); return fallback.textContent.trim(); }
+            return null;
         })()
         """)
         import asyncio
-        await asyncio.sleep(1)
-        errors = await self._eval("""
-        (function() {
-            var els = document.querySelectorAll('.monaco-editor .error, .monaco-editor .warning');
-            return Array.from(els).map(function(e) { return e.textContent; });
-        })()
+        if not clicked:
+            await self._cdp.send_command("Input.dispatchKeyEvent", {
+                "type": "rawKeyDown", "modifiers": 2, "windowsVirtualKeyCode": 13,
+            })
+            await self._cdp.send_command("Input.dispatchKeyEvent", {
+                "type": "keyUp", "modifiers": 2, "windowsVirtualKeyCode": 13,
+            })
+        await asyncio.sleep(2)
+        errors = await self._eval(f"""
+        (function() {{
+            var m = {self._FIND_MONACO};
+            if (!m) return [];
+            var model = m.editor.getModel();
+            if (!model) return [];
+            var markers = m.env.editor.getModelMarkers({{ resource: model.uri }});
+            return markers.map(function(mk) {{
+                return {{
+                    line: mk.startLineNumber,
+                    column: mk.startColumn,
+                    message: mk.message,
+                    severity: mk.severity,
+                }};
+            }});
+        }})()
         """)
         return {"errors": errors}
+
+    async def pine_get_errors(self) -> list[dict]:
+        """Read Pine Script compilation errors from Monaco markers."""
+        return await self._eval(f"""
+        (function() {{
+            var m = {self._FIND_MONACO};
+            if (!m) return [];
+            var model = m.editor.getModel();
+            if (!model) return [];
+            var markers = m.env.editor.getModelMarkers({{ resource: model.uri }});
+            return markers.map(function(mk) {{
+                return {{
+                    line: mk.startLineNumber,
+                    column: mk.startColumn,
+                    message: mk.message,
+                    severity: mk.severity,
+                }};
+            }});
+        }})()
+        """)
+
+    async def pine_get_editor_source(self) -> str | None:
+        """Read the current Pine Script source from the editor."""
+        return await self._eval(f"""
+        (function() {{
+            var m = {self._FIND_MONACO};
+            if (!m) return null;
+            return m.editor.getValue();
+        }})()
+        """)
 
     async def get_pine_source(
         self, study_id: str, entity_id: str | None = None
