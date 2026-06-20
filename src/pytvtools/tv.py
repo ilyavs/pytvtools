@@ -86,10 +86,14 @@ class TV:
             self._target_id = self._target.get("id")
             self._own_tab = False
         else:
-            logger.info("create_new_tab: creating blank page")
-            target = await create_new_tab(port=self.port)
+            target = await find_tv_target(port=self.port)
+            if target:
+                self._own_tab = False
+            else:
+                logger.info("create_new_tab: creating blank page")
+                target = await create_new_tab(port=self.port)
+                self._own_tab = True
             self._target_id = target.get("id")
-            self._own_tab = True
             ws_url = make_ws_url(target)
         self._cdp = CdpConnection(ws_url)
         await self._cdp.connect()
@@ -231,6 +235,8 @@ class TV:
     async def set_symbol(self, symbol: str, timeout: float = 10, wait_data: bool = True) -> None:
         import asyncio
         prev = await self._eval(f"({_CHART_API}.symbol())")
+        if prev == symbol:
+            return
         await self._eval(f"({_CHART_API}.setSymbol({_js_str(symbol)}))")
         for _ in range(15):
             await asyncio.sleep(0.3)
@@ -1150,17 +1156,52 @@ class TV:
     # ------------------------------------------------------------------
 
     async def pine_set_source(self, source: str) -> None:
-        """Inject source into the Pine editor."""
-        escaped = source.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
-        await self._eval(f"""
-        (function() {{
+        """Inject source into the Pine editor using CDP keyboard input.
+
+        Uses ``Input.insertText`` at the CDP level (native OS input),
+        which Monaco handles correctly even for multi-line content.
+        The old approach (``execCommand`` / JavaScript events) could not
+        reliably set multi-line Pine source.
+        """
+        import asyncio
+
+        await self._eval("""
+        (function() {
             var el = document.querySelector('.monaco-editor textarea');
             if (!el) throw new Error('Pine editor not open');
             el.focus();
-            el.select();
-            document.execCommand('insertText', false, `{escaped}`);
-        }})()
+        })()
         """)
+        await asyncio.sleep(0.3)
+
+        # Ctrl+A (select all)
+        ctrl = 17
+        key_a = 65
+        for key, mods in [(ctrl, 0), (key_a, 2)]:
+            await self._cdp.send_command("Input.dispatchKeyEvent", {
+                "type": "rawKeyDown", "modifiers": mods,
+                "windowsVirtualKeyCode": key,
+            })
+        for key, mods in [(key_a, 2), (ctrl, 0)]:
+            await self._cdp.send_command("Input.dispatchKeyEvent", {
+                "type": "keyUp", "modifiers": mods,
+                "windowsVirtualKeyCode": key,
+            })
+
+        await asyncio.sleep(0.2)
+
+        # Delete
+        await self._cdp.send_command("Input.dispatchKeyEvent", {
+            "type": "rawKeyDown", "modifiers": 0, "windowsVirtualKeyCode": 46,
+        })
+        await self._cdp.send_command("Input.dispatchKeyEvent", {
+            "type": "keyUp", "modifiers": 0, "windowsVirtualKeyCode": 46,
+        })
+
+        await asyncio.sleep(0.2)
+
+        # Insert the full source as native text input
+        await self._cdp.send_command("Input.insertText", {"text": source})
 
     async def pine_compile(self) -> dict[str, Any]:
         """Click the compile button and return errors (if any)."""
@@ -1171,7 +1212,8 @@ class TV:
                 var b = btns[i];
                 var aria = (b.getAttribute('aria-label') || '').toLowerCase();
                 var text = (b.textContent || '').trim().toLowerCase();
-                if (aria.indexOf('compile') >= 0 || text.indexOf('add to chart') >= 0) {
+                var title = (b.getAttribute('title') || '').toLowerCase();
+                if (title === 'add to chart' || aria.indexOf('compile') >= 0 || text.indexOf('add to chart') >= 0) {
                     b.click();
                     return;
                 }
@@ -1713,6 +1755,37 @@ class TV:
         })()
         """)
         await asyncio.sleep(0.2)
+        # Also dismiss overlay ads
+        await self._eval("""
+        (function() {
+            var btns = document.querySelectorAll('button');
+            for (var i = 0; i < btns.length; i++) {
+                var text = (btns[i].textContent || '').trim().toLowerCase();
+                if (text === 'close ad') { btns[i].click(); }
+            }
+        })()
+        """)
+        await asyncio.sleep(0.2)
+
+    async def dismiss_ad(self) -> None:
+        """Dismiss overlay ads on the chart."""
+        import asyncio
+        await self._eval("""
+        (function() {
+            var btns = document.querySelectorAll('button, [role="button"]');
+            for (var i = 0; i < btns.length; i++) {
+                var b = btns[i];
+                var text = (b.textContent || '').trim().toLowerCase();
+                var aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                if (text === 'close ad' || aria === 'close ad') {
+                    b.click();
+                    return true;
+                }
+            }
+            return false;
+        })()
+        """)
+        await asyncio.sleep(0.3)
 
     async def _eval(self, expression: str, **kwargs: Any) -> Any:
         if not self._cdp:

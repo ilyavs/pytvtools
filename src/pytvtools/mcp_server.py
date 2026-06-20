@@ -334,6 +334,11 @@ async def list_tools() -> list[Tool]:
             description="Log out of the current TradingView account.",
             inputSchema={"type": "object", "properties": {}},
         ),
+        Tool(
+            name="dismiss_ad",
+            description="Dismiss overlay ads on the chart.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
     ]
 
 
@@ -449,6 +454,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     result = await tv.login(timeout=arguments.get("timeout", 120))
             elif name == "logout":
                 result = await tv.logout()
+            elif name == "dismiss_ad":
+                result = await tv.dismiss_ad()
             elif name == "replay_autoplay":
                 result = await tv.replay_autoplay(speed=arguments.get("speed", 0))
             else:
