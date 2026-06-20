@@ -1,0 +1,12 @@
+//@version=5
+indicator(title="Custom MACD", shorttitle="MACD_Custom", format=format.price, precision=2, timeframe="")
+
+src = input.source(close, "Source")
+fast = input.int(12, "Fast length")
+slow = input.int(26, "Slow length")
+signal = input.int(9, "Signal smoothing")
+
+[macdLine, signalLine, histLine] = ta.macd(src, fast, slow, signal)
+plot(histLine, "Histogram", color=color.new(#30ff30, 70), style=plot.style_histogram)
+plot(signalLine, "Signal", color=color.orange)
+plot(macdLine, "MACD", color=color.blue)

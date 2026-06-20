@@ -1,0 +1,29 @@
+//@version=6
+indicator(title="Custom RSI", shorttitle="RSI_Custom", format=format.price, precision=2, timeframe="")
+
+length = input.int(14, "Length")
+src = input.source(close, "Source")
+
+var float avgGain = na
+var float avgLoss = na
+
+change = src - src[1]
+gain = math.max(change, 0)
+loss = math.max(-change, 0)
+
+if na(avgGain) and bar_index >= length
+    float sumG = 0.0
+    float sumL = 0.0
+    for i = 0 to length - 1
+        sumG += gain[i]
+        sumL += loss[i]
+    avgGain := sumG / length
+    avgLoss := sumL / length
+else if not na(avgGain)
+    avgGain := ((avgGain[1] * (length - 1)) + gain) / length
+    avgLoss := ((avgLoss[1] * (length - 1)) + loss) / length
+
+rs = avgGain / avgLoss
+rsi = 100 - (100 / (1 + rs))
+
+plot(rsi, "RSI", color=color.purple)

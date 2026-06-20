@@ -1,0 +1,7 @@
+//@version=5
+indicator(title="Custom EMA", shorttitle="EMA_Custom", format=format.price, precision=2, timeframe="")
+
+length = input.int(9, "Length")
+src = input.source(close, "Source")
+
+plot(ta.ema(src, length), "EMA", color=color.blue)
