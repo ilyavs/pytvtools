@@ -1836,10 +1836,10 @@ class TV:
         """)
         await asyncio.sleep(0.2)
 
-    async def dismiss_ad(self) -> None:
-        """Dismiss overlay ads on the chart."""
+    async def dismiss_ad(self) -> bool:
+        """Dismiss overlay ads on the chart. Returns ``True`` if an ad was closed."""
         import asyncio
-        await self._eval("""
+        found = bool(await self._eval("""
         (function() {
             var btns = document.querySelectorAll('button, [role="button"]');
             for (var i = 0; i < btns.length; i++) {
@@ -1853,13 +1853,30 @@ class TV:
             }
             return false;
         })()
-        """)
-        await asyncio.sleep(0.3)
+        """))
+        if found:
+            await asyncio.sleep(0.3)
+        return found
 
     async def _eval(self, expression: str, **kwargs: Any) -> Any:
         if not self._cdp:
             raise RuntimeError("Not connected. Call connect() first.")
-        return await self._cdp.evaluate(expression, **kwargs)
+        result = await self._cdp.evaluate(expression, **kwargs)
+        await self._cdp.evaluate("""
+        (function() {
+            var btns = document.querySelectorAll('button, [role="button"]');
+            for (var i = 0; i < btns.length; i++) {
+                var b = btns[i];
+                var text = (b.textContent || '').trim().toLowerCase();
+                var aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                if (text === 'close ad' || aria === 'close ad') {
+                    b.click();
+                    break;
+                }
+            }
+        })()
+        """)
+        return result
 
     async def _ui_click(self, label: str) -> None:
         """Click a UI button by text/aria label."""
