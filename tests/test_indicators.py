@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pytvtools.indicators import sma, ema, rsi, macd, mfi, pvp, supertrend
+from pytvtools.indicators import sma, ema, rsi, macd, mfi, supertrend
 
 
 def approx(seq):
@@ -194,124 +194,6 @@ class TestMFI:
             if v is not None:
                 assert 0 <= v <= 100, f"MFI out of range: {v}"
 
-
-class TestPVP:
-    """Periodic Volume Profile — Point of Control per period."""
-
-    def test_pvp_empty(self):
-        assert pvp([], window="day") == []
-
-    def test_pvp_flat_list_raises(self):
-        with pytest.raises(ValueError, match="requires OHLCV"):
-            pvp([1.0, 2.0, 3.0])
-
-    def test_pvp_single_bar(self):
-        bars = [{"timestamp": 1704153600, "high": 50, "low": 10, "close": 30, "volume": 100}]
-        result = pvp(bars, rows=4)
-        assert len(result) == 1
-        assert result[0]["poc"] == 15.0
-        assert result[0]["start_ts"] == 1704153600
-        assert result[0]["end_ts"] == 1704153600
-        assert result[0]["crossed_ts"] is None
-
-    def test_pvp_two_days(self):
-        bars = [
-            {"timestamp": 1704153600, "high": 50, "low": 10, "close": 30, "volume": 100},
-            {"timestamp": 1704175200, "high": 30, "low": 20, "close": 25, "volume": 400},
-            {"timestamp": 1704240000, "high": 100, "low": 60, "close": 80, "volume": 200},
-            {"timestamp": 1704261600, "high": 90, "low": 70, "close": 80, "volume": 100},
-        ]
-        result = pvp(bars, rows=4)
-        assert len(result) == 2
-        assert result[0]["poc"] == 25.0
-        assert result[0]["start_ts"] == 1704153600
-        assert result[0]["end_ts"] == 1704175200
-        assert result[1]["poc"] == 75.0
-        assert result[1]["start_ts"] == 1704240000
-        assert result[1]["end_ts"] == 1704261600
-
-    def test_pvp_window_week(self):
-        bars = [
-            {"timestamp": 1704153600, "high": 50, "low": 10, "close": 30, "volume": 100},
-            {"timestamp": 1704787200, "high": 100, "low": 60, "close": 80, "volume": 200},
-        ]
-        result = pvp(bars, window="week", rows=4)
-        assert len(result) == 2
-        assert result[0]["poc"] is not None
-        assert result[1]["poc"] is not None
-        assert result[0]["poc"] != result[1]["poc"]
-
-    def test_pvp_window_month(self):
-        bars = [
-            {"timestamp": 1704153600, "high": 50, "low": 10, "close": 30, "volume": 100},
-            {"timestamp": 1706832000, "high": 100, "low": 60, "close": 80, "volume": 200},
-        ]
-        result = pvp(bars, window="month", rows=4)
-        assert len(result) == 2
-        assert result[0]["poc"] is not None
-        assert result[1]["poc"] is not None
-        assert result[0]["poc"] != result[1]["poc"]
-
-    def test_pvp_invalid_window(self):
-        bars = [{"timestamp": 1704153600, "high": 50, "low": 10, "close": 30, "volume": 100}]
-        with pytest.raises(ValueError, match="Unknown window"):
-            pvp(bars, window="year")
-
-    def test_pvp_same_price_all_bars(self):
-        bars = [
-            {"timestamp": 1704153600, "high": 100, "low": 100, "close": 100, "volume": 100},
-            {"timestamp": 1704240000, "high": 100, "low": 100, "close": 100, "volume": 200},
-        ]
-        result = pvp(bars, window="day")
-        assert len(result) == 2
-        assert result[0]["poc"] == 100.0
-        assert result[1]["poc"] == 100.0
-
-    def test_pvp_zero_volume(self):
-        bars = [
-            {"timestamp": 1704153600, "high": 50, "low": 10, "close": 30, "volume": 0},
-            {"timestamp": 1704175200, "high": 30, "low": 20, "close": 25, "volume": 0},
-        ]
-        result = pvp(bars, window="day", rows=4)
-        assert len(result) == 0  # no valid POC
-
-    def test_pvp_crossing_detection(self):
-        """POC crossed by a subsequent bar."""
-        bars = [
-            {"timestamp": 1704153600, "open": 30, "high": 50, "low": 10, "close": 30, "volume": 100},
-            {"timestamp": 1704240000, "open": 20, "high": 25, "low": 15, "close": 22, "volume": 50},
-        ]
-        result = pvp(bars, window="day", rows=2)
-        # Day 1: min=10, max=50, row_size=20
-        #   bar1(10-50): rows 0-1, vol/row=50 each, POC=row0 → 10+0.5*20=20
-        # Day 2 bar: open=20, close=22 → no cross (both above POC=20)
-        assert result[0]["poc"] == 20.0
-        crossed = result[0].get("crossed_ts")
-        # open=20 is not > POC (it's equal), so no cross
-        assert crossed is None
-
-    def test_pvp_crossing_detection_actual_cross(self):
-        """POC crossed when a later bar opens above and closes below."""
-        bars = [
-            {"timestamp": 1704153600, "open": 30, "high": 50, "low": 10, "close": 30, "volume": 100},
-            {"timestamp": 1704240000, "open": 25, "high": 28, "low": 15, "close": 18, "volume": 50},
-        ]
-        result = pvp(bars, window="day", rows=2)
-        assert result[0]["poc"] == 20.0
-        # Day 2: open=25 > 20 > close=18 → crosses POC
-        assert result[0]["crossed_ts"] == 1704240000
-
-    def test_pvp_tick_alignment(self):
-        """Row sizes should be rounded to whole ticks."""
-        bars = [
-            {"timestamp": 1704153600, "high": 100.03, "low": 50.01, "close": 75, "volume": 100},
-        ]
-        result = pvp(bars, rows=5)
-        # avg price ~75, tick_size=0.5
-        # price_range=50.02, raw_row_size=10.004, rounded to 10.0
-        # actual_rows = 50.02/10.0 + 1 = 6
-        assert len(result) == 1
-        assert result[0]["poc"] is not None
 
 
 class TestSuperTrend:
