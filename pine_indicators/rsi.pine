@@ -3,6 +3,7 @@ indicator(title="Custom RSI", shorttitle="RSI_Custom", format=format.price, prec
 
 length = input.int(14, "Length")
 src = input.source(close, "Source")
+ma_length = input.int(14, "MA Length")
 
 var float avgGain = na
 var float avgLoss = na
@@ -25,5 +26,11 @@ else if not na(avgGain)
 
 rs = avgGain / avgLoss
 rsi = 100 - (100 / (1 + rs))
+sma_rsi = ta.sma(rsi, ma_length)
+
+hline(70, "Upper", color=color.gray, linestyle=hline.style_dashed)
+hline(50, "Mid", color=color.gray, linestyle=hline.style_dashed)
+hline(30, "Lower", color=color.gray, linestyle=hline.style_dashed)
 
 plot(rsi, "RSI", color=color.purple)
+plot(sma_rsi, "Signal", color=color.blue, linewidth=2)

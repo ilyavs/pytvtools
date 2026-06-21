@@ -1,3 +1,11 @@
+# Debug scripts (repo root only)
+/debug_*.py
+/_debug_*.py
+/_pine_*.py
+/_test_*.py
+/_update_*.py
+/test_*.py
+
 __pycache__/
 *.pyc
 *.pyo

@@ -81,7 +81,7 @@ class TestGetPineIndicatorSource:
     ])
     def test_known_indicator(self, name, expected_title):
         source = get_pine_indicator_source(name)
-        assert "//@version=5" in source
+        assert "//@version=6" in source
         assert expected_title in source
 
     def test_unknown_indicator_raises(self):
@@ -156,7 +156,7 @@ class TestComparePineIndicatorPineEditorMode:
 
     async def test_entity_not_found_raises(self, mock_tv):
         mock_tv._get_study_ids = AsyncMock(return_value=[])
-        with pytest.raises(PineEntityNotFoundError, match="No new study entity"):
+        with pytest.raises(PineEntityNotFoundError, match="No study entity found"):
             await compare_pine_indicator(
                 mock_tv, "TEST", "1D", "rsi",
                 use_pine_editor=True,
@@ -164,7 +164,7 @@ class TestComparePineIndicatorPineEditorMode:
 
     async def test_compile_error_raises(self, mock_tv):
         mock_tv.pine_compile = AsyncMock(
-            return_value={"errors": ["Syntax error at line 10"]}
+            return_value={"errors": [{"line": 10, "message": "Syntax error", "severity": 8}]}
         )
         with pytest.raises(PineCompileError, match="Syntax error"):
             await compare_pine_indicator(
@@ -185,8 +185,8 @@ class TestComparePineIndicatorPineEditorMode:
             [],
             ["custom123"],
         ])
-        # _eval is called: (1) read built-in inputs, (2) open Pine editor, (3) read custom inputs
         mock_tv._eval = AsyncMock(side_effect=[
+            True,
             {"in_0": 21, "in_1": "close", "in_2": False},
             None,
             {"in_0": 20},
@@ -210,7 +210,7 @@ class TestComparePineIndicatorPineEditorMode:
         )
         mock_tv.pine_set_source.assert_called_once()
         source = mock_tv.pine_set_source.call_args[0][0]
-        assert "//@version=5" in source
+        assert "//@version=6" in source
 
 
 class TestPineMismatch:

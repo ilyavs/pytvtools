@@ -1,4 +1,4 @@
-//@version=5
+//@version=6
 indicator(title="Custom MFI", shorttitle="MFI_Custom", format=format.price, precision=2, timeframe="")
 
 length = input.int(14, "Length")
