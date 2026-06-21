@@ -1,0 +1,17 @@
+//@version=6
+indicator(title="Custom SRSI", shorttitle="SRSI_Custom", format=format.price, precision=2, timeframe="")
+
+smooth_k = input.int(3, "Smooth K")
+smooth_d = input.int(3, "Smooth D")
+len_rsi = input.int(14, "Length RSI")
+len_stoch = input.int(14, "Length Stoch")
+src = input.source(close, "Source")
+
+rsi_val = ta.rsi(src, len_rsi)
+k = ta.sma(ta.stoch(rsi_val, rsi_val, rsi_val, len_stoch), smooth_k)
+d = ta.sma(k, smooth_d)
+
+plot(k, "K", color=color.blue)
+plot(d, "D", color=color.orange)
+hline(80, "Upper", color=color.gray, linestyle=hline.style_dashed)
+hline(20, "Lower", color=color.gray, linestyle=hline.style_dashed)

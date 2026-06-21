@@ -19,7 +19,7 @@ import inspect
 import logging
 from typing import Any
 
-from pytvtools.indicators import rsi, sma, ema, macd, mfi, bbands, atr
+from pytvtools.indicators import rsi, sma, ema, macd, mfi, bbands, atr, srsi
 from pytvtools.tv import TV
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,7 @@ _BUILTIN_COMPUTERS: dict[str, Any] = {
     "STD;Money_Flow": mfi,
     "STD;Bollinger_Bands": bbands,
     "STD;Average_True_Range": atr,
+    "STD;Stochastic_RSI": srsi,
 }
 
 # Maps TV internal input IDs (in_0, in_1, …) to Python function parameter names
@@ -44,12 +45,14 @@ _TV_INPUT_MAP: dict[str, dict[str, str]] = {
     "STD;Money_Flow": {"in_0": "period"},
     "STD;Bollinger_Bands": {"in_0": "period", "in_3": "stddev"},
     "STD;Average_True_Range": {"in_0": "period"},
+    "STD;Stochastic_RSI": {"in_0": "smooth_k", "in_1": "smooth_d", "in_2": "period"},
 }
 
 # Maps TV plot names to Python dict keys for multi-plot indicators
 _PLOT_KEY_MAP: dict[str, dict[str, str]] = {
     "STD;MACD": {"Histogram": "histogram", "MACD": "macd", "Signal": "signal"},
     "STD;Bollinger_Bands": {"Upper": "upper", "Basis": "basis", "Lower": "lower"},
+    "STD;Stochastic_RSI": {"K": "k", "D": "d"},
 }
 
 _JS_GET_STUDY_INPUTS: str = """
@@ -77,6 +80,9 @@ _STUDY_ID_ALIASES: dict[str, str] = {
     "BOLLINGER_BANDS": "STD;Bollinger_Bands",
     "ATR": "STD;Average_True_Range",
     "STD;ATR": "STD;Average_True_Range",
+    "SRSI": "STD;Stochastic_RSI",
+    "STD;SRSI": "STD;Stochastic_RSI",
+    "STOCH_RSI": "STD;Stochastic_RSI",
 }
 
 

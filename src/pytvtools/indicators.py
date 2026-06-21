@@ -400,6 +400,56 @@ def bbands(
     return {"upper": upper, "basis": basis, "lower": lower}
 
 
+def srsi(
+    data: list[float] | list[dict[str, Any]],
+    period: int = 14,
+    smooth_k: int = 3,
+    smooth_d: int = 3,
+) -> dict[str, list[float | None]]:
+    """Stochastic RSI.
+
+    Returns ``{"k": ..., "d": ...}``, each a list aligned to the input length.
+    """
+    prices = _prices(data)
+    rsi_vals = rsi(prices, period=period)
+
+    raw_k: list[float | None] = [None] * len(prices)
+    for i in range(len(prices)):
+        if rsi_vals[i] is None:
+            continue
+        start = max(0, i - period + 1)
+        window = [rsi_vals[j] for j in range(start, i + 1) if rsi_vals[j] is not None]
+        if len(window) < 2:
+            continue
+        low = min(window)
+        high = max(window)
+        if high == low:
+            raw_k[i] = 100.0
+        else:
+            raw_k[i] = (rsi_vals[i] - low) / (high - low) * 100
+
+    k = sma_series(raw_k, smooth_k) if smooth_k > 0 else raw_k
+    d = sma_series(k, smooth_d) if smooth_d > 0 else k
+
+    return {"k": k, "d": d}
+
+
+def sma_series(values: list[float | None], period: int) -> list[float | None]:
+    """Apply SMA smoothing to a series that may have leading None values."""
+    valid = [v for v in values if v is not None]
+    if not valid:
+        return values
+    smoothed = sma(valid, period)
+    result: list[float | None] = [None] * len(values)
+    idx = 0
+    for i in range(len(values)):
+        if values[i] is not None:
+            if idx < len(smoothed):
+                result[i] = smoothed[idx]
+            idx += 1
+    return result
+
+
 def atr(
     data: list[float] | list[dict[str, Any]],
     period: int = 14,

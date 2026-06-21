@@ -65,6 +65,11 @@ _PINE_INDICATORS: dict[str, dict[str, Any]] = {
         "study_id": "STD;Average_True_Range",
         "plot_index": 0,
     },
+    "srsi": {
+        "file": "srsi.pine",
+        "study_id": "STD;Stochastic_RSI",
+        "plot_index": 0,
+    },
 }
 
 
