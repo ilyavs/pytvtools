@@ -19,7 +19,7 @@ import inspect
 import logging
 from typing import Any
 
-from pytvtools.indicators import rsi, sma, ema, macd, mfi
+from pytvtools.indicators import rsi, sma, ema, macd, mfi, bbands
 from pytvtools.tv import TV
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,7 @@ _BUILTIN_COMPUTERS: dict[str, Any] = {
     "STD;EMA": ema,
     "STD;MACD": macd,
     "STD;Money_Flow": mfi,
+    "STD;Bollinger_Bands": bbands,
 }
 
 # Maps TV internal input IDs (in_0, in_1, …) to Python function parameter names
@@ -40,6 +41,13 @@ _TV_INPUT_MAP: dict[str, dict[str, str]] = {
     "STD;EMA": {"in_0": "period"},
     "STD;MACD": {"in_1": "fast", "in_2": "slow", "in_3": "signal"},
     "STD;Money_Flow": {"in_0": "period"},
+    "STD;Bollinger_Bands": {"in_0": "period", "in_3": "stddev"},
+}
+
+# Maps TV plot names to Python dict keys for multi-plot indicators
+_PLOT_KEY_MAP: dict[str, dict[str, str]] = {
+    "STD;MACD": {"Histogram": "histogram", "MACD": "macd", "Signal": "signal"},
+    "STD;Bollinger_Bands": {"Upper": "upper", "Basis": "basis", "Lower": "lower"},
 }
 
 _JS_GET_STUDY_INPUTS: str = """
@@ -61,6 +69,10 @@ _STUDY_ID_ALIASES: dict[str, str] = {
     "MACD": "STD;MACD",
     "STD;MFI": "STD;Money_Flow",
     "MFI": "STD;Money_Flow",
+    "BB": "STD;Bollinger_Bands",
+    "STD;BB": "STD;Bollinger_Bands",
+    "BOLLINGER": "STD;Bollinger_Bands",
+    "BOLLINGER_BANDS": "STD;Bollinger_Bands",
 }
 
 
@@ -248,9 +260,9 @@ async def compare_indicator(
     timestamps = [b["timestamp"] for b in bars]
     raw = computer(bars, **py_kwargs)
     if isinstance(raw, dict):
-        macd_key_map = {"Histogram": "histogram", "MACD": "macd", "Signal": "signal"}
+        key_map = _PLOT_KEY_MAP.get(study_id, {})
         tv_plot_name = plots[plot_index]["name"] if plot_index < len(plots) else ""
-        py_key = macd_key_map.get(tv_plot_name, list(raw.keys())[plot_index] if plot_index < len(raw) else list(raw.keys())[0])
+        py_key = key_map.get(tv_plot_name, list(raw.keys())[plot_index] if plot_index < len(raw) else list(raw.keys())[0])
         py_values = raw[py_key]
     else:
         py_values = raw

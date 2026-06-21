@@ -55,6 +55,11 @@ _PINE_INDICATORS: dict[str, dict[str, Any]] = {
         "study_id": "STD;Money_Flow",
         "plot_index": 0,
     },
+    "bbands": {
+        "file": "bbands.pine",
+        "study_id": "STD;Bollinger_Bands",
+        "plot_index": 0,
+    },
 }
 
 

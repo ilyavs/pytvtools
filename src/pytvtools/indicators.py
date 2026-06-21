@@ -369,3 +369,32 @@ def macd(
             histogram[i] = macd_line[i] - signal_padded[i]
 
     return {"macd": macd_line, "signal": signal_padded, "histogram": histogram}
+
+
+def bbands(
+    data: list[float] | list[dict[str, Any]],
+    period: int = 20,
+    stddev: float = 2.0,
+) -> dict[str, list[float | None]]:
+    """Bollinger Bands.
+
+    Returns ``{"upper": ..., "basis": ..., "lower": ...}``, each a
+    list aligned to the input length.
+    """
+    prices = _prices(data)
+    upper: list[float | None] = [None] * len(prices)
+    basis: list[float | None] = [None] * len(prices)
+    lower: list[float | None] = [None] * len(prices)
+
+    for i in range(len(prices)):
+        if i < period - 1:
+            continue
+        window = prices[i - period + 1 : i + 1]
+        ma = sum(window) / period
+        variance = sum((x - ma) ** 2 for x in window) / period
+        sd = variance ** 0.5
+        basis[i] = ma
+        upper[i] = ma + stddev * sd
+        lower[i] = ma - stddev * sd
+
+    return {"upper": upper, "basis": basis, "lower": lower}

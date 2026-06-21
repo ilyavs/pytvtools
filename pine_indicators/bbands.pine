@@ -1,0 +1,15 @@
+//@version=6
+indicator(title="Custom BB", shorttitle="BB_Custom", format=format.price, precision=2, timeframe="")
+
+length = input.int(20, "Length")
+src = input.source(close, "Source")
+mult = input.float(2.0, "StdDev")
+
+basis = ta.sma(src, length)
+dev = mult * ta.stdev(src, length)
+upper = basis + dev
+lower = basis - dev
+
+plot(upper, "Upper", color=color.purple)
+plot(basis, "Basis", color=color.blue)
+plot(lower, "Lower", color=color.purple)

@@ -1,6 +1,6 @@
 # Bollinger Bands (BB)
 
-**TV study ID:** `STD;BB`
+**TV study ID:** `STD;Bollinger_Bands`
 **Python function:** `bbands(data, period=20, stddev=2.0)`
 **Pine file:** `pine_indicators/bbands.pine`
 
@@ -10,7 +10,7 @@
 |-------|----|---------|
 | Length | `in_0` | 20 |
 | Source | `in_1` | close |
-| StdDev | `in_2` | 2.0 |
+| StdDev | `in_3` | 2.0 |
 | MA Type | `in_3` | SMA |
 | Median | `in_4` | false |
 
