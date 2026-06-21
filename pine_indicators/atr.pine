@@ -1,0 +1,6 @@
+//@version=6
+indicator(title="Custom ATR", shorttitle="ATR_Custom", format=format.price, precision=2, timeframe="")
+
+length = input.int(14, "Length")
+
+plot(ta.atr(length), "ATR", color=color.purple)

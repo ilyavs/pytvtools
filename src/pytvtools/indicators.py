@@ -398,3 +398,42 @@ def bbands(
         lower[i] = ma - stddev * sd
 
     return {"upper": upper, "basis": basis, "lower": lower}
+
+
+def atr(
+    data: list[float] | list[dict[str, Any]],
+    period: int = 14,
+) -> list[float | None]:
+    """Average True Range (ATR) with Wilder's smoothing (RMA).
+
+    Requires OHLCV dict bars.  Raises ``ValueError`` if given flat floats.
+    """
+    if not data:
+        return []
+    if not isinstance(data[0], dict):
+        raise ValueError("ATR requires OHLCV dict bars")
+    highs = [float(d["high"]) for d in data]  # type: ignore[misc]
+    lows = [float(d["low"]) for d in data]  # type: ignore[misc]
+    closes = [float(d["close"]) for d in data]  # type: ignore[misc]
+
+    tr: list[float | None] = [None] * len(data)
+    for i in range(1, len(data)):
+        hl = highs[i] - lows[i]
+        hc = abs(highs[i] - closes[i - 1])
+        lc = abs(lows[i] - closes[i - 1])
+        tr[i] = max(hl, hc, lc)
+
+    result: list[float | None] = [None] * len(data)
+
+    if period <= 1:
+        return result
+
+    rma = sum(tr[1 : period + 1]) / period  # type: ignore[arg-type]
+    result[period] = rma
+
+    for i in range(period + 1, len(tr)):
+        if tr[i] is not None:
+            rma = (rma * (period - 1) + tr[i]) / period
+            result[i] = rma
+
+    return result

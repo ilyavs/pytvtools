@@ -1,6 +1,6 @@
 # Average True Range (ATR)
 
-**TV study ID:** `STD;ATR`
+**TV study ID:** `STD;Average_True_Range`
 **Python function:** `atr(data, period=14)`
 **Pine file:** `pine_indicators/atr.pine`
 

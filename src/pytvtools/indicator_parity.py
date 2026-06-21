@@ -19,7 +19,7 @@ import inspect
 import logging
 from typing import Any
 
-from pytvtools.indicators import rsi, sma, ema, macd, mfi, bbands
+from pytvtools.indicators import rsi, sma, ema, macd, mfi, bbands, atr
 from pytvtools.tv import TV
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,7 @@ _BUILTIN_COMPUTERS: dict[str, Any] = {
     "STD;MACD": macd,
     "STD;Money_Flow": mfi,
     "STD;Bollinger_Bands": bbands,
+    "STD;Average_True_Range": atr,
 }
 
 # Maps TV internal input IDs (in_0, in_1, …) to Python function parameter names
@@ -42,6 +43,7 @@ _TV_INPUT_MAP: dict[str, dict[str, str]] = {
     "STD;MACD": {"in_1": "fast", "in_2": "slow", "in_3": "signal"},
     "STD;Money_Flow": {"in_0": "period"},
     "STD;Bollinger_Bands": {"in_0": "period", "in_3": "stddev"},
+    "STD;Average_True_Range": {"in_0": "period"},
 }
 
 # Maps TV plot names to Python dict keys for multi-plot indicators
@@ -73,6 +75,8 @@ _STUDY_ID_ALIASES: dict[str, str] = {
     "STD;BB": "STD;Bollinger_Bands",
     "BOLLINGER": "STD;Bollinger_Bands",
     "BOLLINGER_BANDS": "STD;Bollinger_Bands",
+    "ATR": "STD;Average_True_Range",
+    "STD;ATR": "STD;Average_True_Range",
 }
 
 

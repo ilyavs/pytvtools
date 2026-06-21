@@ -60,6 +60,11 @@ _PINE_INDICATORS: dict[str, dict[str, Any]] = {
         "study_id": "STD;Bollinger_Bands",
         "plot_index": 0,
     },
+    "atr": {
+        "file": "atr.pine",
+        "study_id": "STD;Average_True_Range",
+        "plot_index": 0,
+    },
 }
 
 
