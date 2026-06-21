@@ -60,6 +60,17 @@ Input ID order doesn't always match order in the settings panel — read the raw
 
 ### 3. Implement Python function in `src/pytvtools/indicators.py`
 
+**Hard rule: never duplicate parity-tested building blocks.**
+If your indicator depends on another indicator (e.g. ATR for SuperTrend, SMA for SRSI), import and call the existing parity-tested function from the same module instead of inlining the computation. Every indicator in `indicators.py` that is registered in `_BUILTIN_COMPUTERS` is already parity-tested against TV's built-in — using it guarantees your ATR/SMA/etc. exactly match TV's output.
+
+```python
+# ✅ Correct: reuse existing parity-tested implementation
+from pytvtools.indicators import atr
+atr_vals = atr(data, period)
+
+# ❌ Wrong: duplicated ATR logic that will drift from the parity-tested version
+```
+
 **Conventions:**
 - First param `data: list[float] | list[dict[str, Any]]` — use `_prices(data)` for close-only, extract inline for multi-column
 - Returns `list[float | None]` (single-plot) or `dict[str, list[float | None]]` (multi-plot)
@@ -161,7 +172,12 @@ async with TV() as tv:
         tv, "BINANCE:BTCUSDT", "1D", "STD;My_Indicator"
     )
     print(report.summary())
-    # Target: 100% match, 0 mismatches, ±0.01 tolerance
+    # MANDATORY: 0 mismatches. Any mismatch is a bug — fix it, do not paper over it.
+    report = await compare_indicator(
+        tv, "BINANCE:BTCUSDT", "1D", "STD;My_Indicator"
+    )
+    print(report.summary())
+    assert len(report.mismatches) == 0, f"{len(report.mismatches)} mismatches found"
 
     # Multi-plot: check each plot by index
     for pi in range(3):
@@ -169,11 +185,12 @@ async with TV() as tv:
         print(r.summary())
 ```
 
-If mismatches exist:
-1. Check TV's actual computation (compare Pine ref vs built-in)
-2. Verify input values match (`_TV_INPUT_MAP`)
-3. Add tolerance or fix Python logic
-4. For recursive indicators (EMA, Wilder's RSI), ensure the chart loads enough history (zoom out)
+**Hard rule: zero mismatches is mandatory. Never accept or explain away mismatches.**
+If mismatches exist they are *always* a real bug in the Python implementation. Investigate by:
+1. Tracing the first mismatched bar — print Python vs TV values bar-by-bar starting from the warmup boundary
+2. Verifying the ATR seed matches TV's tr[0]=high[0]-low[0] (off-by-one is the most common cause)
+3. Checking input mapping against `getInputValues()` raw IDs
+4. For recursive indicators, ensure the chart loaded full history (`scrollToFirstBar + zoom(-1000)` + 3s sleep)
 
 ### 8. Run unit tests
 
@@ -228,12 +245,13 @@ git push
 | Problem | Fix |
 |---------|------|
 | `add_indicator` JS error using short name | Use full TV study ID (`STD;Bollinger_Bands` not `STD;BB`) |
-| Mismatches on first bars | Zoom chart to load full history (`scrollToFirstBar` + `zoom(-1000)`) |
+| Mismatches on first bars | Check ATR seed: TV uses `tr[0]=high[0]-low[0]`, SMA at bar `period-1` — off-by-one is the most common bug |
 | Input IDs don't match order | Read raw IDs from `getInputValues()` |
 | Wrong smoothing type | TV's RSI/MFI uses Wilder's (`alpha=1/period`), ATR uses RMA, SRSI uses SMA |
 | Multi-plot key mismatch | Check TV plot names in `get_indicator_data()` output vs `_PLOT_KEY_MAP` |
 | `pine_compile` returns `{"ok":true}` but no entity | Editor may be closed; open it first with `tv._eval()` to click Pine button |
 | Chart has 2-indicator hard limit | Always `remove_all_indicators()` before each `compare_indicator()` call |
+| Mismatches attributed to "boundary artifact" or "good enough" | No such thing — trace bar-by-bar and fix the actual bug |
 
 ## Reference Files
 

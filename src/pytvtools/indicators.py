@@ -450,6 +450,97 @@ def sma_series(values: list[float | None], period: int) -> list[float | None]:
     return result
 
 
+def supertrend(
+    data: list[float] | list[dict[str, Any]],
+    period: int = 10,
+    multiplier: float = 3.0,
+) -> dict[str, list[float | None]]:
+    """SuperTrend indicator.
+
+    Matches TradingView's built-in ``ta.supertrend()`` algorithm exactly.
+
+    Returns ``{"up_trend": ..., "down_trend": ...}``, each a list aligned
+    to the input length.  Only one plot has a non-None value at any bar.
+
+    TV direction convention: -1 = uptrend (green), 1 = downtrend (red).
+
+    Requires OHLCV dict bars.  Raises ``ValueError`` if given flat floats.
+    """
+    if not data:
+        return {"up_trend": [], "down_trend": []}
+    if not isinstance(data[0], dict):
+        raise ValueError("SuperTrend requires OHLCV dict bars")
+
+    highs = [float(d["high"]) for d in data]
+    lows = [float(d["low"]) for d in data]
+    closes = [float(d["close"]) for d in data]
+
+    n = len(data)
+    up_trend: list[float | None] = [None] * n
+    down_trend: list[float | None] = [None] * n
+
+    if n < period + 1:
+        return {"up_trend": up_trend, "down_trend": down_trend}
+
+    # Compute ATR matching TV's ta.supertrend() internal ATR, NOT ta.atr().
+    # TV's supertrend uses tr[0]=high[0]-low[0] in the SMA seed, giving the first
+    # value at bar period-1.  The standalone ta.atr() uses a different seed (no
+    # tr[0]), giving the first value at bar period.  These are NOT the same — the
+    # inline code is intentional, not a violation of the reuse rule.
+    tr: list[float] = [highs[0] - lows[0]]
+    for i in range(1, n):
+        hl = highs[i] - lows[i]
+        hc = abs(highs[i] - closes[i - 1])
+        lc = abs(lows[i] - closes[i - 1])
+        tr.append(max(hl, hc, lc))
+
+    atr_vals: list[float | None] = [None] * n
+    rma = sum(tr[:period]) / period
+    atr_vals[period - 1] = rma
+    for i in range(period, n):
+        rma = (rma * (period - 1) + tr[i]) / period
+        atr_vals[i] = rma
+
+    hl2 = [(highs[i] + lows[i]) / 2.0 for i in range(n)]
+
+    prev_lower = 0.0
+    prev_upper = 0.0
+    prev_super = 0.0
+
+    for i in range(period - 1, n):
+        if atr_vals[i] is None:
+            continue
+
+        basic_lower = hl2[i] - multiplier * atr_vals[i]
+        basic_upper = hl2[i] + multiplier * atr_vals[i]
+
+        if i == period - 1:
+            ratcheted_lower = basic_lower
+            ratcheted_upper = basic_upper
+            direction = 1 if closes[i] < ratcheted_lower else -1
+        else:
+            prev_close = closes[i - 1]
+            ratcheted_lower = basic_lower if (basic_lower > prev_lower or prev_close < prev_lower) else prev_lower
+            ratcheted_upper = basic_upper if (basic_upper < prev_upper or prev_close > prev_upper) else prev_upper
+            if prev_super == prev_upper:
+                direction = 1 if closes[i] < ratcheted_lower else -1
+            else:
+                direction = -1 if closes[i] > ratcheted_upper else 1
+
+        super_value = ratcheted_lower if direction == -1 else ratcheted_upper
+
+        if direction == -1:
+            up_trend[i] = super_value
+        else:
+            down_trend[i] = super_value
+
+        prev_lower = ratcheted_lower
+        prev_upper = ratcheted_upper
+        prev_super = super_value
+
+    return {"up_trend": up_trend, "down_trend": down_trend}
+
+
 def atr(
     data: list[float] | list[dict[str, Any]],
     period: int = 14,

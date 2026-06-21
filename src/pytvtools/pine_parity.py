@@ -70,6 +70,11 @@ _PINE_INDICATORS: dict[str, dict[str, Any]] = {
         "study_id": "STD;Stochastic_RSI",
         "plot_index": 0,
     },
+    "supertrend": {
+        "file": "supertrend.pine",
+        "study_id": "STD;Supertrend",
+        "plot_index": 0,
+    },
 }
 
 

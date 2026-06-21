@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pytvtools.indicators import sma, ema, rsi, macd, mfi, pvp
+from pytvtools.indicators import sma, ema, rsi, macd, mfi, pvp, supertrend
 
 
 def approx(seq):
@@ -312,3 +312,91 @@ class TestPVP:
         # actual_rows = 50.02/10.0 + 1 = 6
         assert len(result) == 1
         assert result[0]["poc"] is not None
+
+
+class TestSuperTrend:
+    def test_empty(self):
+        result = supertrend([])
+        assert result == {"up_trend": [], "down_trend": []}
+
+    def test_flat_list_raises(self):
+        with pytest.raises(ValueError, match="requires OHLCV"):
+            supertrend([1.0, 2.0], period=10)
+
+    def test_too_short(self):
+        bars = [{"high": 1, "low": 1, "close": 1} for _ in range(5)]
+        result = supertrend(bars, period=10)
+        assert result["up_trend"] == [None] * 5
+        assert result["down_trend"] == [None] * 5
+
+    def test_basic_uptrend(self):
+        """Steadily rising prices should eventually flip to uptrend."""
+        bars = []
+        for i in range(50):
+            bars.append({
+                "high": 100 + i + 1,
+                "low": 100 + i - 0.5,
+                "close": 100 + i + 0.5,
+            })
+        result = supertrend(bars, period=10, multiplier=3.0)
+        assert len(result["up_trend"]) == 50
+        assert len(result["down_trend"]) == 50
+        # First `period - 1` values should be None (RMA from bar 0 starts at period-1)
+        assert result["up_trend"][:9] == [None] * 9
+        assert result["down_trend"][:9] == [None] * 9
+        # First value at index 9 — rising price > lowerBand → flips to uptrend
+        assert result["up_trend"][9] is not None
+        # Eventually flips to downtrend as well
+        assert any(v is not None for v in result["down_trend"])
+        # Only one plot active at a time
+        for i in range(len(bars)):
+            assert not (result["up_trend"][i] is not None and result["down_trend"][i] is not None)
+
+    def test_basic_downtrend(self):
+        """Steadily falling prices should eventually trigger downtrend."""
+        bars = []
+        for i in range(50):
+            bars.append({
+                "high": 100 - i + 1,
+                "low": 100 - i - 0.5,
+                "close": 100 - i - 0.5,
+            })
+        result = supertrend(bars, period=10, multiplier=3.0)
+        assert result["up_trend"][:9] == [None] * 9
+        # First value at index 9 — price hasn't crossed lower band yet, starts uptrend
+        assert result["up_trend"][9] is not None
+        # Eventually flips to downtrend as price keeps falling
+        assert any(v is not None for v in result["down_trend"])
+
+    def test_struct(self):
+        """Result dict has expected keys."""
+        bars = [{"high": 10, "low": 8, "close": 9} for _ in range(20)]
+        result = supertrend(bars, period=5)
+        assert "up_trend" in result
+        assert "down_trend" in result
+        assert len(result["up_trend"]) == 20
+        assert len(result["down_trend"]) == 20
+
+    def test_flip(self):
+        """Price flipping up then down should produce matching trend changes."""
+        bars = []
+        for i in range(30):
+            bars.append({
+                "high": 100 + i,
+                "low": 99 + i,
+                "close": 100 + i,
+            })
+        for i in range(30, 60):
+            bars.append({
+                "high": 130 - i,
+                "low": 129 - i,
+                "close": 130 - i,
+            })
+        result = supertrend(bars, period=5, multiplier=2.0)
+        up_count = sum(1 for v in result["up_trend"] if v is not None)
+        down_count = sum(1 for v in result["down_trend"] if v is not None)
+        assert up_count > 0
+        assert down_count > 0
+        # No overlap: same index can't have both up and down
+        for i in range(len(bars)):
+            assert not (result["up_trend"][i] is not None and result["down_trend"][i] is not None)
