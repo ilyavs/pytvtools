@@ -75,6 +75,11 @@ _PINE_INDICATORS: dict[str, dict[str, Any]] = {
         "study_id": "STD;Supertrend",
         "plot_index": 0,
     },
+    "dss": {
+        "file": "dss.pine",
+        "study_id": "PUB;85",
+        "plot_index": 0,
+    },
 }
 
 

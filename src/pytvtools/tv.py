@@ -9,9 +9,11 @@ Usage:
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
+import re
 from typing import Any
 
 from pytvtools.cdp import CdpConnection, CdpError, close_tab, create_new_tab, find_tv_target, make_ws_url
@@ -1300,6 +1302,149 @@ class TV:
         })()
         """))
 
+    async def _get_script_page_url(self, study_id: str) -> str | None:
+        """Resolve ``PUB;id`` to its TradingView script page URL.
+
+        Opens the indicators dialog, triggers a server-side search, reads
+        the script hash (from ``item.public.imageUrl``) and display name,
+        then constructs ``https://www.tradingview.com/script/{hash}-{slug}/``.
+
+        Returns ``None`` for built-in studies (``STD;``), or when the
+        script is not found or its source is not publicly visible.
+        """
+        if not study_id.startswith("PUB;"):
+            return None
+
+        import asyncio
+
+        await self._close_dialogs()
+
+        # Open the indicators dialog so search is available
+        await self._eval("""
+        (function() {
+            var btn = document.querySelector('[data-name=open-indicators-dialog]');
+            if (btn) { btn.click(); return true; }
+            return false;
+        })()
+        """)
+        await asyncio.sleep(1.5)
+
+        # Trigger server-side search for the exact study
+        await self._eval(f"""
+        (function() {{
+            var d = TradingViewApi._studyMarket._dialog;
+            if (d && d._handleSearch) {{
+                d._handleSearch({_js_str(study_id)});
+                return true;
+            }}
+            return false;
+        }})()
+        """)
+        await asyncio.sleep(3)
+
+        # Read hash + name from the search results
+        result = await self._eval(f"""
+        (function() {{
+            var dlg = TradingViewApi._studyMarket._dialog;
+            if (!dlg || !dlg._props) return null;
+            var sr = dlg._props._value.searchResults;
+            if (!sr) return null;
+
+            for (var t = 0; t < sr.length; t++) {{
+                var tab = sr[t];
+                var content = tab.content || tab.filteredContent;
+                if (!content) continue;
+                var items = Array.isArray(content) ? content : [];
+                for (var j = 0; j < items.length; j++) {{
+                    var item = items[j];
+                    if (item && item.id === {_js_str(study_id)}) {{
+                        var pub = (typeof item.public === 'string')
+                            ? JSON.parse(item.public)
+                            : (item.public || {{}});
+                        var hash = pub.imageUrl || '';
+                        var name = item.shortDescription || item.title || '';
+                        var visible = String(item.isSourceVisible) === 'true';
+                        return JSON.stringify({{hash: hash, name: name, visible: visible}});
+                    }}
+                }}
+            }}
+            return null;
+        }})()
+        """)
+
+        await self._close_dialogs()
+
+        if not result:
+            return None
+
+        data = json.loads(result)
+        if not data.get("hash") or not data.get("visible"):
+            return None
+
+        # Build URL slug from the display name
+        name = data["name"]
+        slug = name.replace(" ", "-")
+        slug = slug.replace("--", "-")
+        slug = "".join(c for c in slug if c.isalnum() or c == "-")
+        slug = slug.strip("-").lower()
+
+        return f"https://www.tradingview.com/script/{data['hash']}-{slug}/"
+
+    async def _extract_source_from_page(self, url: str) -> str | None:
+        """Navigate to a script page, click 'Source code', extract Pine source.
+
+        Restores the original chart URL after extraction (waits
+        up to 15 s for the chart to be ready again).
+        """
+        import asyncio
+
+        current_url = await self._eval("window.location.href")
+        if current_url == "about:blank":
+            current_url = None
+
+        try:
+            await self._eval(f"window.location.href = {_js_str(url)}")
+            await asyncio.sleep(8)
+
+            await self._eval("""
+            (function() {
+                var buttons = document.querySelectorAll('button');
+                for (var i = 0; i < buttons.length; i++) {
+                    if (buttons[i].innerText === 'Source code') {
+                        buttons[i].click();
+                        return true;
+                    }
+                }
+                return false;
+            })()
+            """)
+            await asyncio.sleep(3)
+
+            b64 = await self._eval("""
+            (function() {
+                var pres = document.querySelectorAll('pre');
+                if (pres.length && pres[0].innerText.length > 50) {
+                    return btoa(unescape(encodeURIComponent(pres[0].innerText)));
+                }
+                var codes = document.querySelectorAll('code');
+                for (var i = 0; i < codes.length; i++) {
+                    var t = codes[i].innerText || '';
+                    if (t.length > 50 && t.indexOf('//@version') >= 0) {
+                        return btoa(unescape(encodeURIComponent(t)));
+                    }
+                }
+                return '';
+            })()
+            """)
+
+            if not b64:
+                return None
+            return base64.b64decode(b64).decode("utf-8")
+        finally:
+            if current_url:
+                await self._eval(f"window.location.href = {_js_str(current_url)}")
+                await asyncio.sleep(5)
+
     async def get_pine_source(
         self, study_id: str, entity_id: str | None = None
     ) -> str | None:
@@ -1365,7 +1510,15 @@ class TV:
             """, await_promise=True)
             if source:
                 self._pine_source_cache[study_id] = source
-            return source
+                return source
+
+            # Strategy 3: navigate to script page and extract from "Source code" tab
+            url = await self._get_script_page_url(study_id)
+            if url:
+                source = await self._extract_source_from_page(url)
+                if source:
+                    self._pine_source_cache[study_id] = source
+                    return source
 
         self._pine_source_cache[study_id] = None
         return None
@@ -1862,20 +2015,23 @@ class TV:
         if not self._cdp:
             raise RuntimeError("Not connected. Call connect() first.")
         result = await self._cdp.evaluate(expression, **kwargs)
-        await self._cdp.evaluate("""
-        (function() {
-            var btns = document.querySelectorAll('button, [role="button"]');
-            for (var i = 0; i < btns.length; i++) {
-                var b = btns[i];
-                var text = (b.textContent || '').trim().toLowerCase();
-                var aria = (b.getAttribute('aria-label') || '').toLowerCase();
-                if (text === 'close ad' || aria === 'close ad') {
-                    b.click();
-                    break;
+        try:
+            await self._cdp.evaluate("""
+            (function() {
+                var btns = document.querySelectorAll('button, [role="button"]');
+                for (var i = 0; i < btns.length; i++) {
+                    var b = btns[i];
+                    var text = (b.textContent || '').trim().toLowerCase();
+                    var aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                    if (text === 'close ad' || aria === 'close ad') {
+                        b.click();
+                        break;
+                    }
                 }
-            }
-        })()
-        """)
+            })()
+            """)
+        except Exception:
+            pass
         return result
 
     async def _ui_click(self, label: str) -> None:

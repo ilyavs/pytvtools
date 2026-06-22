@@ -1,0 +1,19 @@
+//@version=4
+//  Copyright by HPotter v1.0 24/04/2014
+//  Double Smoothed Stochastics (DSS) is designed by William Blaw. 
+//  It attempts to combine moving average methods with oscillator principles. 
+study(title="DSS Bressert (Double Smoothed Stochastic)", shorttitle="DSS Bressert")
+PDS = input(10, minval=1)
+EMAlen = input(9, minval=1)
+TriggerLen = input(5, minval=1)
+Overbought = input(80, minval=1)
+Oversold = input(20, minval=1)
+res = input(title="Resolution", type=input.resolution, defval="60")
+hline(Overbought, color=color.green, linestyle=hline.style_solid)
+hline(Oversold, color=color.red, linestyle=hline.style_solid)
+[c,h,l] = security(syminfo.tickerid, res, [close,high,low])
+xPreCalc = ema(stoch(c, h, l, PDS), EMAlen)
+xDSS = ema(stoch(xPreCalc, xPreCalc, xPreCalc, PDS), EMAlen)
+xTrigger = ema(xDSS, TriggerLen)
+plot(xDSS, color=color.blue, title="DSS")
+plot(xTrigger, color=color.red, title="Trigger")

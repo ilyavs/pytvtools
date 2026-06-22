@@ -36,10 +36,11 @@ class TestConnection:
         cdp.connect.assert_awaited_once()
 
     async def test_connect_create_tab_fails(self):
-        with patch("pytvtools.tv.create_new_tab", AsyncMock(side_effect=Exception("Chrome not running"))):
-            tv = TV()
-            with pytest.raises(Exception, match="Chrome not running"):
-                await tv.connect()
+        with patch("pytvtools.tv.find_tv_target", AsyncMock(return_value=None)):
+            with patch("pytvtools.tv.create_new_tab", AsyncMock(side_effect=Exception("Chrome not running"))):
+                tv = TV()
+                with pytest.raises(Exception, match="Chrome not running"):
+                    await tv.connect()
 
     async def test_disconnect(self, mock_cdp):
         tv, cdp = mock_cdp
@@ -59,7 +60,10 @@ class TestConnection:
         cdp.close.assert_awaited_once()
 
     async def test_context_manager_no_target(self):
-        with patch("pytvtools.tv.create_new_tab", AsyncMock(side_effect=Exception("fail"))):
+        with (
+            patch("pytvtools.tv.find_tv_target", AsyncMock(side_effect=Exception("fail"))),
+            patch("pytvtools.tv.create_new_tab", AsyncMock()),
+        ):
             with pytest.raises(Exception, match="fail"):
                 async with TV():
                     pass
@@ -73,7 +77,7 @@ class TestChartControl:
         cdp.evaluate.return_value = {"symbol": "NASDAQ:AAPL", "timeframe": "1D", "chartType": 1}
         result = await tv.get_state()
         assert result == {"symbol": "NASDAQ:AAPL", "timeframe": "1D", "chartType": 1}
-        expr = cdp.evaluate.call_args[0][0]
+        expr = cdp.evaluate.call_args_list[0][0][0]
         assert "TradingViewApi.chart()" in expr
         assert "symbol()" in expr
         assert "resolution()" in expr
@@ -83,13 +87,13 @@ class TestChartControl:
         tv, cdp = mock_cdp
         ready = {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "BTCUSD"}
         cdp.evaluate.side_effect = [
-            "OLD",     # prev
-            None,      # setSymbol
-            "BTCUSD",  # symbol poll (differs from prev → break)
-            ready, ready, ready,  # wait_for_chart_ready
+            "OLD", None,     # prev + ad
+            None, None,      # setSymbol + ad
+            "BTCUSD", None,  # symbol poll (differs from prev → break) + ad
+            ready, None, ready, None, ready, None,  # wait_for_chart_ready + ad
         ]
         await tv.set_symbol("BTCUSD")
-        expr = cdp.evaluate.call_args_list[1][0][0]
+        expr = cdp.evaluate.call_args_list[2][0][0]
         assert "setSymbol" in expr
         assert "BTCUSD" in expr
 
@@ -103,10 +107,10 @@ class TestChartControl:
         tv, cdp = mock_cdp
         zero = {"isLoading": False, "domBarCount": 0, "modelBars": 0, "validBars": 0, "currentSymbol": "BTCUSD"}
         cdp.evaluate.side_effect = [
-            "OLD",     # prev
-            None,      # setSymbol
-            "NODATA",  # symbol poll (differs → break)
-            zero, zero, zero, zero, zero,  # wait_for_chart_ready (barCount=0 → timeout)
+            "OLD", None,     # prev + ad
+            None, None,      # setSymbol + ad
+            "NODATA", None,  # symbol poll (differs → break) + ad
+            zero, None, zero, None, zero, None, zero, None, zero, None,  # wait_for_chart_ready + ad
         ]
         with pytest.raises(SymbolNotFoundError, match="data did not arrive"):
             await tv.set_symbol("NODATA", timeout=1)
@@ -114,35 +118,35 @@ class TestChartControl:
     async def test_wait_for_chart_ready_timeout(self, mock_cdp):
         tv, cdp = mock_cdp
         loading = {"isLoading": True, "domBarCount": 0, "modelBars": 0, "validBars": 0, "currentSymbol": "OLD"}
-        cdp.evaluate.side_effect = [loading] * 6
+        cdp.evaluate.side_effect = [loading, None] * 5
         result = await tv.wait_for_chart_ready(timeout=1)
         assert result is False
 
     async def test_wait_for_chart_ready_stable(self, mock_cdp):
         tv, cdp = mock_cdp
         ready = {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "AAPL"}
-        cdp.evaluate.side_effect = [ready, ready, ready]
+        cdp.evaluate.side_effect = [ready, None, ready, None, ready, None]
         result = await tv.wait_for_chart_ready(expected_symbol="AAPL", timeout=5)
         assert result is True
 
     async def test_set_timeframe(self, mock_cdp):
         tv, cdp = mock_cdp
         await tv.set_timeframe("60")
-        expr = cdp.evaluate.call_args[0][0]
+        expr = cdp.evaluate.call_args_list[0][0][0]
         assert "setResolution" in expr
         assert "60" in expr
 
     async def test_set_chart_type(self, mock_cdp):
         tv, cdp = mock_cdp
         await tv.set_chart_type(1)
-        expr = cdp.evaluate.call_args[0][0]
+        expr = cdp.evaluate.call_args_list[0][0][0]
         assert "setChartType" in expr
         assert "1" in expr
 
     async def test_scroll_to_date(self, mock_cdp):
         tv, cdp = mock_cdp
         await tv.scroll_to_date("2025-01-15")
-        expr = cdp.evaluate.call_args[0][0]
+        expr = cdp.evaluate.call_args_list[0][0][0]
         assert "scrollToDate" in expr
         assert "2025-01-15" in expr
 
@@ -151,7 +155,7 @@ class TestChartControl:
         cdp.evaluate.return_value = {"from": 1700000000, "to": 1705000000}
         result = await tv.get_visible_range()
         assert result == {"from": 1700000000, "to": 1705000000}
-        expr = cdp.evaluate.call_args[0][0]
+        expr = cdp.evaluate.call_args_list[0][0][0]
         assert "visibleRange" in expr or "first()" in expr
 
 
@@ -173,7 +177,7 @@ class TestData:
         result = await tv.get_ohlcv(count=1, summary=False)
         assert len(result) == 1
         assert result[0]["close"] == 108
-        expr = cdp.evaluate.call_args[0][0]
+        expr = cdp.evaluate.call_args_list[0][0][0]
         assert "bars()" in expr
 
     async def test_get_quote(self, mock_cdp):
@@ -263,12 +267,12 @@ class TestIndicators:
 
     async def test_add_indicator(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp.evaluate.side_effect = [[], "abc123"]
+        cdp.evaluate.side_effect = [[], None, "abc123", None]
         eid = await tv.add_indicator("RSI@tv-basicstudies")
         assert eid == "abc123"
         assert "abc123" in tv._indicator_ids
-        # Second call carries the _createStudy expression
-        expr = cdp.evaluate.call_args_list[1][0][0]
+        # Second _eval call carries the _createStudy expression
+        expr = cdp.evaluate.call_args_list[2][0][0]
         assert "_createStudy" in expr
         assert "RSI@tv-basicstudies" in expr
         assert "java" in expr
@@ -276,26 +280,26 @@ class TestIndicators:
     async def test_add_indicator_std_id(self, mock_cdp):
         """STD; prefix uses pine-type _createStudy."""
         tv, cdp = mock_cdp
-        cdp.evaluate.side_effect = [[], "sma123"]
+        cdp.evaluate.side_effect = [[], None, "sma123", None]
         eid = await tv.add_indicator("STD;SMA")
         assert eid == "sma123"
-        expr = cdp.evaluate.call_args_list[1][0][0]
+        expr = cdp.evaluate.call_args_list[2][0][0]
         assert "_createStudy" in expr
         assert "STD;SMA" in expr
         assert "pine" in expr
 
     async def test_add_indicator_custom_id(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp.evaluate.side_effect = [[], "custom123"]
+        cdp.evaluate.side_effect = [[], None, "custom123", None]
         eid = await tv.add_indicator("SFFMev")
         assert eid == "custom123"
-        expr = cdp.evaluate.call_args_list[1][0][0]
+        expr = cdp.evaluate.call_args_list[2][0][0]
         assert "SFFMev" in expr
 
     async def test_add_indicator_limit(self, mock_cdp):
         tv, cdp = mock_cdp
         tv._indicator_ids = {"eid1", "eid2"}
-        cdp.evaluate.side_effect = [["eid1", "eid2"]]
+        cdp.evaluate.side_effect = [["eid1", "eid2"], None]
         with pytest.raises(TooManyIndicatorsError):
             await tv.add_indicator("RSI@tv-basicstudies")
 
@@ -304,7 +308,7 @@ class TestIndicators:
         tv._indicator_ids = {"abc123"}
         await tv.remove_indicator("abc123")
         assert "abc123" not in tv._indicator_ids
-        expr = cdp.evaluate.call_args[0][0]
+        expr = cdp.evaluate.call_args_list[0][0][0]
         assert "removeEntity" in expr
         assert "abc123" in expr
 
@@ -313,85 +317,85 @@ class TestIndicators:
         tv._indicator_ids = {"eid1", "eid2"}
         await tv.remove_all_indicators()
         assert tv._indicator_ids == set()
-        expr = cdp.evaluate.call_args[0][0]
+        expr = cdp.evaluate.call_args_list[0][0][0]
         assert "removeAllStudies" in expr
 
     async def test_add_indicator_uses_await_promise(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp.evaluate.side_effect = [[], "abc123"]
+        cdp.evaluate.side_effect = [[], None, "abc123", None]
         await tv.add_indicator("RSI@tv-basicstudies")
-        assert cdp.evaluate.call_args_list[1][1].get("await_promise") is True
+        assert cdp.evaluate.call_args_list[2][1].get("await_promise") is True
 
     async def test_add_indicator_display_name(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp.evaluate.side_effect = [[], "abc123"]
+        cdp.evaluate.side_effect = [[], None, "abc123", None]
         eid = await tv.add_indicator("Relative Strength Index")
         assert eid == "abc123"
         assert "abc123" in tv._indicator_ids
         # Should use createStudy (public API), not _createStudy
-        expr = cdp.evaluate.call_args_list[1][0][0]
+        expr = cdp.evaluate.call_args_list[2][0][0]
         assert "createStudy" in expr
         assert "_createStudy" not in expr
         assert "Relative Strength Index" in expr
 
     async def test_add_indicator_display_name_not_found(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp.evaluate.side_effect = [[], None]  # createStudy returned None
+        cdp.evaluate.side_effect = [[], None, None, None]  # createStudy returned None
         eid = await tv.add_indicator("NonExistent Indicator")
         assert eid is None
         assert len(tv._indicator_ids) == 0
 
     async def test_add_indicator_pub_id(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp.evaluate.side_effect = [[], "pub123"]
+        cdp.evaluate.side_effect = [[], None, "pub123", None]
         eid = await tv.add_indicator("PUB;85")
         assert eid == "pub123"
         assert "pub123" in tv._indicator_ids
-        expr = cdp.evaluate.call_args_list[1][0][0]
+        expr = cdp.evaluate.call_args_list[2][0][0]
         assert "_createStudy" in expr
         assert "PUB;85" in expr
         assert "pine" in expr
 
     async def test_add_indicator_with_inputs(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp.evaluate.side_effect = [[], "abc123", True]
+        cdp.evaluate.side_effect = [[], None, "abc123", None, True, None]
         eid = await tv.add_indicator("RSI@tv-basicstudies", inputs={"length": 14})
         assert eid == "abc123"
-        # Call 1: _get_study_ids, Call 2: _createStudy, Call 3: set_indicator_inputs
-        assert len(cdp.evaluate.call_args_list) == 3
-        expr1 = cdp.evaluate.call_args_list[1][0][0]
+        # _eval 1: _get_study_ids, _eval 2: _createStudy, _eval 3: set_indicator_inputs
+        assert len(cdp.evaluate.call_args_list) == 6
+        expr1 = cdp.evaluate.call_args_list[2][0][0]
         assert "_createStudy" in expr1
         assert "RSI@tv-basicstudies" in expr1
-        expr2 = cdp.evaluate.call_args_list[2][0][0]
+        expr2 = cdp.evaluate.call_args_list[4][0][0]
         assert "dataSourceForId" in expr2
         assert "length" in expr2
 
     async def test_add_indicator_with_inputs_display_name(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp.evaluate.side_effect = [[], "abc123", True]
+        cdp.evaluate.side_effect = [[], None, "abc123", None, True, None]
         eid = await tv.add_indicator("Relative Strength Index", inputs={"length": 14})
         assert eid == "abc123"
-        assert len(cdp.evaluate.call_args_list) == 3
-        expr1 = cdp.evaluate.call_args_list[1][0][0]
+        assert len(cdp.evaluate.call_args_list) == 6
+        expr1 = cdp.evaluate.call_args_list[2][0][0]
         assert "createStudy" in expr1
         assert "_createStudy" not in expr1
-        expr2 = cdp.evaluate.call_args_list[2][0][0]
+        expr2 = cdp.evaluate.call_args_list[4][0][0]
         assert "dataSourceForId" in expr2
         assert "length" in expr2
 
     async def test_add_indicator_with_inputs_no_eid(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp.evaluate.side_effect = [[], None]  # creation returned None
+        cdp.evaluate.side_effect = [[], None, None, None]  # creation returned None
         eid = await tv.add_indicator("RSI@tv-basicstudies", inputs={"length": 14})
         assert eid is None
-        # Should NOT have called set_indicator_inputs (only 2 calls)
-        assert len(cdp.evaluate.call_args_list) == 2
+        # Should NOT have called set_indicator_inputs (only 2 _eval calls)
+        assert len(cdp.evaluate.call_args_list) == 4
 
     async def test_set_indicator_inputs(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.return_value = True
         await tv.set_indicator_inputs("abc123", {"length": 20, "source": "close"})
-        expr = cdp.evaluate.call_args[0][0]
+        expr = cdp.evaluate.call_args_list[0][0][0]
         assert "dataSourceForId" in expr
         assert "_study" in expr
 
@@ -399,7 +403,7 @@ class TestIndicators:
         tv, cdp = mock_cdp
         cdp.evaluate.return_value = True
         await tv.set_indicator_inputs("abc123", {})
-        expr = cdp.evaluate.call_args[0][0]
+        expr = cdp.evaluate.call_args_list[0][0][0]
         assert "fullRecalc" in expr
 
     async def test_get_indicator_count(self, mock_cdp):
@@ -421,17 +425,17 @@ class TestIndicatorSearch:
     async def test_search_indicators(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
-            None,            # _close_dialogs: body.click
-            None,            # _close_dialogs: Escape
-            None,            # dialog open
-            [{"id": "STD;RSI", "name": "Relative Strength Index"}],  # built-in
-            None,            # _handleSearch
-            [                # community
-                {"id": "PUB;131", "name": "RSI Candles"},
-                {"id": "PUB;197", "name": "RSI Bands"},
-            ],
-            None,            # _close_dialogs: body.click
-            None,            # _close_dialogs: Escape
+            None, None,                                         # _close_dialogs 1: body.click + ad
+            None, None,                                         # _close_dialogs 2: close buttons + ad
+            None, None,                                         # _close_dialogs 3: close ad + ad
+            None, None,                                         # dialog open + ad
+            [{"id": "STD;RSI", "name": "Relative Strength Index"}], None,  # built-in + ad
+            None, None,                                         # _handleSearch + ad
+            [{"id": "PUB;131", "name": "RSI Candles"},
+             {"id": "PUB;197", "name": "RSI Bands"}], None,    # community + ad
+            None, None,                                         # _close_dialogs 1: body.click + ad
+            None, None,                                         # _close_dialogs 2: close buttons + ad
+            None, None,                                         # _close_dialogs 3: close ad + ad
         ]
         results = await tv.search_indicators("RSI")
         assert len(results) == 3
@@ -442,21 +446,23 @@ class TestIndicatorSearch:
         # then community
         assert results[1]["id"] == "PUB;131"
         assert results[1]["study_id"] == "PUB;131"
-        # Verify _handleSearch was called (index 4, after body.click, Escape, dialog open, built-in search)
-        search_expr = cdp.evaluate.call_args_list[4][0][0]
+        # Verify _handleSearch was called
+        search_expr = cdp.evaluate.call_args_list[10][0][0]
         assert "_handleSearch" in search_expr
 
     async def test_search_indicators_empty(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
-            None,  # _close_dialogs: body.click
-            None,  # _close_dialogs: Escape
-            None,  # dialog open
-            [],    # no built-in matches
-            None,  # _handleSearch
-            [],    # no community matches
-            None,  # _close_dialogs: body.click
-            None,  # _close_dialogs: Escape
+            None, None,  # _close_dialogs 1: body.click + ad
+            None, None,  # _close_dialogs 2: close buttons + ad
+            None, None,  # _close_dialogs 3: close ad + ad
+            None, None,  # dialog open + ad
+            [], None,    # no built-in matches + ad
+            None, None,  # _handleSearch + ad
+            [], None,    # no community matches + ad
+            None, None,  # _close_dialogs 1: body.click + ad
+            None, None,  # _close_dialogs 2: close buttons + ad
+            None, None,  # _close_dialogs 3: close ad + ad
         ]
         results = await tv.search_indicators("zzzz")
         assert results == []
@@ -464,14 +470,16 @@ class TestIndicatorSearch:
     async def test_search_indicators_only_builtin(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
-            None,  # _close_dialogs: body.click
-            None,  # _close_dialogs: Escape
-            None,  # dialog open
-            [{"id": "STD;RSI", "name": "Relative Strength Index"}],
-            None,
-            [],    # no community matches
-            None,  # _close_dialogs: body.click
-            None,  # _close_dialogs: Escape
+            None, None,  # _close_dialogs 1: body.click + ad
+            None, None,  # _close_dialogs 2: close buttons + ad
+            None, None,  # _close_dialogs 3: close ad + ad
+            None, None,  # dialog open + ad
+            [{"id": "STD;RSI", "name": "Relative Strength Index"}], None,  # built-in + ad
+            None, None,  # _handleSearch + ad
+            [], None,    # no community matches + ad
+            None, None,  # _close_dialogs 1: body.click + ad
+            None, None,  # _close_dialogs 2: close buttons + ad
+            None, None,  # _close_dialogs 3: close ad + ad
         ]
         results = await tv.search_indicators("RSI")
         assert len(results) == 1
@@ -480,14 +488,16 @@ class TestIndicatorSearch:
     async def test_search_indicators_only_community(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
-            None,  # _close_dialogs: body.click
-            None,  # _close_dialogs: Escape
-            None,  # dialog open
-            [],    # no built-in matches
-            None,
-            [{"id": "PUB;42", "name": "DSS Bressert"}],
-            None,  # _close_dialogs: body.click
-            None,  # _close_dialogs: Escape
+            None, None,  # _close_dialogs 1: body.click + ad
+            None, None,  # _close_dialogs 2: close buttons + ad
+            None, None,  # _close_dialogs 3: close ad + ad
+            None, None,  # dialog open + ad
+            [], None,    # no built-in matches + ad
+            None, None,  # _handleSearch + ad
+            [{"id": "PUB;42", "name": "DSS Bressert"}], None,  # community + ad
+            None, None,  # _close_dialogs 1: body.click + ad
+            None, None,  # _close_dialogs 2: close buttons + ad
+            None, None,  # _close_dialogs 3: close ad + ad
         ]
         results = await tv.search_indicators("DSS")
         assert len(results) == 1
@@ -497,14 +507,16 @@ class TestIndicatorSearch:
     async def test_search_indicators_none_results(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
-            None,  # _close_dialogs: body.click
-            None,  # _close_dialogs: Escape
-            None,  # dialog open
-            None,  # built-in query returned None
-            None,
-            None,  # community query returned None
-            None,  # _close_dialogs: body.click
-            None,  # _close_dialogs: Escape
+            None, None,  # _close_dialogs 1: body.click + ad
+            None, None,  # _close_dialogs 2: close buttons + ad
+            None, None,  # _close_dialogs 3: close ad + ad
+            None, None,  # dialog open + ad
+            None, None,  # built-in query returned None + ad
+            None, None,  # _handleSearch + ad
+            None, None,  # community query returned None + ad
+            None, None,  # _close_dialogs 1: body.click + ad
+            None, None,  # _close_dialogs 2: close buttons + ad
+            None, None,  # _close_dialogs 3: close ad + ad
         ]
         results = await tv.search_indicators("RSI")
         assert results == []
@@ -512,14 +524,16 @@ class TestIndicatorSearch:
     async def test_search_indicators_dedup(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
-            None,  # _close_dialogs: body.click
-            None,  # _close_dialogs: Escape
-            None,  # dialog open
-            [{"id": "STD;RSI", "name": "Relative Strength Index"}],
-            None,
-            [{"id": "STD;RSI", "name": "Relative Strength Index"}],  # same ID from community
-            None,  # _close_dialogs: body.click
-            None,  # _close_dialogs: Escape
+            None, None,  # _close_dialogs 1: body.click + ad
+            None, None,  # _close_dialogs 2: close buttons + ad
+            None, None,  # _close_dialogs 3: close ad + ad
+            None, None,  # dialog open + ad
+            [{"id": "STD;RSI", "name": "Relative Strength Index"}], None,  # built-in + ad
+            None, None,  # _handleSearch + ad
+            [{"id": "STD;RSI", "name": "Relative Strength Index"}], None,  # same ID from community + ad
+            None, None,  # _close_dialogs 1: body.click + ad
+            None, None,  # _close_dialogs 2: close buttons + ad
+            None, None,  # _close_dialogs 3: close ad + ad
         ]
         results = await tv.search_indicators("RSI")
         assert len(results) == 1  # deduplicated
@@ -603,15 +617,19 @@ class TestBatch:
 
     async def test_batch_ohlcv(self, mock_cdp):
         tv, cdp = mock_cdp
-        ready = {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "AAPL"}
         restore_ready = {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "BTCUSD"}
         cdp.evaluate.side_effect = [
-            {"symbol": "BTCUSD", "timeframe": "D", "chartType": 1},  # get_state
-            "BTCUSD", None, "AAPL",  # set_symbol AAPL (wait_data=False — no ready x3)
-            None,                # set_timeframe
-            {"count": 3, "high": 150, "low": 100, "open": 120, "close": 140, "avg_volume": 1000000, "range": "50.00"},  # get_ohlcv
-            "AAPL", None, "BTCUSD", restore_ready, restore_ready, restore_ready,  # restore set_symbol
-            None,                # restore set_timeframe
+            {"symbol": "BTCUSD", "timeframe": "D", "chartType": 1}, None,  # get_state + ad
+            "BTCUSD", None,      # set_symbol: prev + ad
+            None, None,          # set_symbol: set + ad
+            "AAPL", None,        # set_symbol: poll hits + ad
+            None, None,          # set_timeframe + ad
+            {"count": 3, "high": 150, "low": 100, "open": 120, "close": 140, "avg_volume": 1000000, "range": "50.00"}, None,  # get_ohlcv + ad
+            "AAPL", None,        # restore: prev + ad
+            None, None,          # restore: set + ad
+            "BTCUSD", None,      # restore: poll hits + ad
+            restore_ready, None, restore_ready, None, restore_ready, None,  # restore: wait_for_chart_ready × 3 + ad
+            None, None,          # restore: set_timeframe + ad
         ]
         result = await tv.batch(["AAPL"], ["D"], action="ohlcv")
         assert "AAPL" in result
@@ -619,15 +637,19 @@ class TestBatch:
 
     async def test_batch_studies(self, mock_cdp):
         tv, cdp = mock_cdp
-        ready = {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "AAPL"}
         restore_ready = {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "BTCUSD"}
         cdp.evaluate.side_effect = [
-            {"symbol": "BTCUSD", "timeframe": "D", "chartType": 1},  # get_state
-            "BTCUSD", None, "AAPL",  # set_symbol AAPL (wait_data=False — no ready x3)
-            None,                # set_timeframe
-            {"RSI": {"title": "RSI", "values": [{"timestamp": 1, "value": 50}]}},
-            "AAPL", None, "BTCUSD", restore_ready, restore_ready, restore_ready,  # restore set_symbol
-            None,                # restore set_timeframe
+            {"symbol": "BTCUSD", "timeframe": "D", "chartType": 1}, None,  # get_state + ad
+            "BTCUSD", None,      # set_symbol: prev + ad
+            None, None,          # set_symbol: set + ad
+            "AAPL", None,        # set_symbol: poll hits + ad
+            None, None,          # set_timeframe + ad
+            {"RSI": {"title": "RSI", "values": [{"timestamp": 1, "value": 50}]}}, None,  # get_study_values + ad
+            "AAPL", None,        # restore: prev + ad
+            None, None,          # restore: set + ad
+            "BTCUSD", None,      # restore: poll hits + ad
+            restore_ready, None, restore_ready, None, restore_ready, None,  # restore: wait_for_chart_ready × 3 + ad
+            None, None,          # restore: set_timeframe + ad
         ]
         result = await tv.batch(["AAPL"], ["D"], action="studies")
         assert "AAPL" in result
@@ -636,13 +658,18 @@ class TestBatch:
         tv, cdp = mock_cdp
         restore_ready = {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "BTCUSD"}
         cdp.evaluate.side_effect = [
-            {"symbol": "BTCUSD", "timeframe": "D", "chartType": 1},  # get_state
-            "BTCUSD", None, "AAPL",  # set_symbol AAPL
-            None,                # set_timeframe
-            {"count": 3, "high": 150, "low": 100, "open": 120, "close": 140, "avg_volume": 1000000, "range": "50.00"},  # get_ohlcv
-            {"RSI": {"title": "RSI", "values": [{"timestamp": 1, "value": 50}]}},  # get_study_values
-            "AAPL", None, "BTCUSD", restore_ready, restore_ready, restore_ready,  # restore state
-            None,                # restore set_timeframe
+            {"symbol": "BTCUSD", "timeframe": "D", "chartType": 1}, None,  # get_state + ad
+            "BTCUSD", None,      # set_symbol: prev + ad
+            None, None,          # set_symbol: set + ad
+            "AAPL", None,        # set_symbol: poll hits + ad
+            None, None,          # set_timeframe + ad
+            {"count": 3, "high": 150, "low": 100, "open": 120, "close": 140, "avg_volume": 1000000, "range": "50.00"}, None,  # get_ohlcv + ad
+            {"RSI": {"title": "RSI", "values": [{"timestamp": 1, "value": 50}]}}, None,  # get_study_values + ad
+            "AAPL", None,        # restore: prev + ad
+            None, None,          # restore: set + ad
+            "BTCUSD", None,      # restore: poll hits + ad
+            restore_ready, None, restore_ready, None, restore_ready, None,  # restore: wait_for_chart_ready × 3 + ad
+            None, None,          # restore: set_timeframe + ad
         ]
         result = await tv.batch(["AAPL"], ["D"], action="all")
         assert "AAPL" in result
@@ -665,9 +692,9 @@ class TestPineEditor:
     async def test_pine_set_source(self, mock_cdp):
         tv, cdp = mock_cdp
         await tv.pine_set_source("//@version=6\nindicator('test')")
-        expr = cdp.evaluate.call_args[0][0]
+        expr = cdp.evaluate.call_args_list[0][0][0]
         assert "monaco-editor" in expr
-        assert "insertText" in expr
+        assert "setValue" in expr
 
     async def test_pine_compile(self, mock_cdp):
         tv, cdp = mock_cdp
@@ -682,7 +709,7 @@ class TestUI:
     async def test_ui_click(self, mock_cdp):
         tv, cdp = mock_cdp
         await tv._ui_click("Indicators")
-        expr = cdp.evaluate.call_args[0][0]
+        expr = cdp.evaluate.call_args_list[0][0][0]
         assert "querySelectorAll" in expr
         assert "Indicators" in expr
 
@@ -699,11 +726,11 @@ class TestReplay:
     async def test_replay_start(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
-            True,                         # isReplayAvailable
-            None,                         # showReplayToolbar
-            None,                         # selectFirstAvailableDate
-            True,                         # isReplayStarted
-            "2020-01-01",                 # currentDate
+            True, None,         # isReplayAvailable + ad
+            None, None,         # showReplayToolbar + ad
+            None, None,         # selectFirstAvailableDate + ad
+            True, None,         # isReplayStarted + ad
+            "2020-01-01", None, # currentDate + ad
         ]
         result = await tv.replay_start()
         assert result["success"] is True
@@ -713,11 +740,11 @@ class TestReplay:
     async def test_replay_start_specific_date(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
-            True,
-            None,
-            None,
-            True,
-            "2024-06-01",
+            True, None,
+            None, None,
+            None, None,
+            True, None,
+            "2024-06-01", None,
         ]
         result = await tv.replay_start(date="2024-06-01")
         assert result["success"] is True
@@ -725,7 +752,7 @@ class TestReplay:
 
     async def test_replay_start_not_available(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp.evaluate.side_effect = [False]
+        cdp.evaluate.side_effect = [False, None]
         result = await tv.replay_start()
         assert result["success"] is False
         assert "error" in result
@@ -733,9 +760,9 @@ class TestReplay:
     async def test_replay_stop(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
-            True,    # isReplayStarted
-            None,    # stopReplay
-            None,    # hideReplayToolbar
+            True, None,  # isReplayStarted + ad
+            None, None,  # stopReplay + ad
+            None, None,  # hideReplayToolbar + ad
         ]
         result = await tv.replay_stop()
         assert result["action"] == "replay_stopped"
@@ -743,8 +770,8 @@ class TestReplay:
     async def test_replay_stop_already_stopped(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
-            False,   # isReplayStarted
-            None,    # hideReplayToolbar
+            False, None,  # isReplayStarted + ad
+            None, None,   # hideReplayToolbar + ad
         ]
         result = await tv.replay_stop()
         assert result["action"] == "already_stopped"
@@ -759,7 +786,7 @@ class TestReplay:
             "current_date": "2024-01-15",
             "autoplay_delay": 0,
         }
-        cdp.evaluate.side_effect = [fake_status]
+        cdp.evaluate.side_effect = [fake_status, None]
         result = await tv.replay_status()
         assert result["is_replay_started"] is True
         assert result["replay_mode"] == "bars"
@@ -767,9 +794,9 @@ class TestReplay:
     async def test_replay_step(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
-            True,             # isReplayStarted
-            None,             # doStep
-            "2024-01-16",     # currentDate
+            True, None,           # isReplayStarted + ad
+            None, None,           # doStep + ad
+            "2024-01-16", None,   # currentDate + ad
         ]
         result = await tv.replay_step()
         assert result["success"] is True
@@ -777,7 +804,7 @@ class TestReplay:
 
     async def test_replay_step_not_started(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp.evaluate.side_effect = [False]
+        cdp.evaluate.side_effect = [False, None]
         result = await tv.replay_step()
         assert result["success"] is False
         assert "error" in result
@@ -785,11 +812,11 @@ class TestReplay:
     async def test_replay_autoplay(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
-            True,    # isReplayStarted
-            None,    # changeAutoplayDelay(2000)
-            None,    # toggleAutoplay
-            True,    # isAutoplayStarted
-            2000,    # autoplayDelay
+            True, None,   # isReplayStarted + ad
+            None, None,   # changeAutoplayDelay(2000) + ad
+            None, None,   # toggleAutoplay + ad
+            True, None,   # isAutoplayStarted + ad
+            2000, None,   # autoplayDelay + ad
         ]
         result = await tv.replay_autoplay(speed=2000)
         assert result["success"] is True
@@ -797,7 +824,7 @@ class TestReplay:
 
     async def test_replay_autoplay_not_started(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp.evaluate.side_effect = [False]
+        cdp.evaluate.side_effect = [False, None]
         result = await tv.replay_autoplay()
         assert result["success"] is False
 
@@ -822,7 +849,7 @@ class TestAuth:
         cdp.evaluate.return_value = True
         result = await tv.is_logged_in()
         assert result is True
-        expr = cdp.evaluate.call_args[0][0]
+        expr = cdp.evaluate.call_args_list[0][0][0]
         assert "header-user-profile" in expr
         assert "TradingViewApi._user" in expr
 
@@ -835,14 +862,15 @@ class TestAuth:
 
     async def test_login_manual_waits_for_redirect(self, mock_cdp):
         tv, cdp = mock_cdp
+        state = {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "BTCUSD"}
         cdp.evaluate.side_effect = [
-            False,                    # is_logged_in
-            None, None,               # _close_dialogs (body.click, close buttons)
-            None,                     # navigate to sign-in
-            "https://www.tradingview.com/chart/",  # URL poll — redirected
-            {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "BTCUSD"},
-            {"isLoading": False, "domBarCount": 100, "modelBars": 501, "validBars": 501, "currentSymbol": "BTCUSD"},
-            {"isLoading": False, "domBarCount": 100, "modelBars": 501, "validBars": 501, "currentSymbol": "BTCUSD"},
+            False, None,                                                  # is_logged_in + ad
+            None, None,                                                   # _close_dialogs: body.click + ad
+            None, None,                                                   # _close_dialogs: close buttons + ad
+            None, None,                                                   # _close_dialogs: close ad + ad
+            None, None,                                                   # navigate + ad
+            "https://www.tradingview.com/chart/", None,                   # URL poll + ad
+            state, None, state, None, state, None,                        # wait_for_chart_ready × 3 + ad
         ]
         result = await tv.login()
         assert result["success"] is True
@@ -850,12 +878,14 @@ class TestAuth:
     async def test_login_manual_timeout(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
-            False,
-            None, None,               # _close_dialogs
-            None,
-            "https://www.tradingview.com/accounts/signin/",
-            "https://www.tradingview.com/accounts/signin/",
-            "https://www.tradingview.com/accounts/signin/",
+            False, None,                                                  # is_logged_in + ad
+            None, None,                                                   # _close_dialogs: body.click + ad
+            None, None,                                                   # _close_dialogs: close buttons + ad
+            None, None,                                                   # _close_dialogs: close ad + ad
+            None, None,                                                   # navigate + ad
+            "https://www.tradingview.com/accounts/signin/", None,         # URL poll + ad
+            "https://www.tradingview.com/accounts/signin/", None,         # URL poll + ad
+            "https://www.tradingview.com/accounts/signin/", None,         # URL poll + ad
         ]
         result = await tv.login(timeout=2)
         assert result["success"] is False
@@ -863,37 +893,35 @@ class TestAuth:
 
     async def test_login_programmatic_fills_and_submits(self, mock_cdp):
         tv, cdp = mock_cdp
+        state = {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "AAPL"}
         cdp.evaluate.side_effect = [
-            False,                    # is_logged_in
-            None,                     # navigate
-            True,                     # email input found
-            True,                     # fill email
-            True,                     # has_password (one-step)
-            True,                     # fill password
-            True,                     # click sign in
-            "https://www.tradingview.com/chart/",
-            {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "AAPL"},
-            {"isLoading": False, "domBarCount": 100, "modelBars": 501, "validBars": 501, "currentSymbol": "AAPL"},
-            {"isLoading": False, "domBarCount": 100, "modelBars": 501, "validBars": 501, "currentSymbol": "AAPL"},
+            False, None,               # is_logged_in + ad
+            None, None,                # navigate + ad
+            True, None,                # email found + ad
+            True, None,                # fill email + ad
+            True, None,                # has_password (one-step) + ad
+            True, None,                # fill password + ad
+            True, None,                # click sign in + ad
+            "https://www.tradingview.com/chart/", None,  # URL poll + ad
+            state, None, state, None, state, None,       # wait_for_chart_ready × 3 + ad
         ]
         result = await tv.login(username="u@e.com", password="pass")
         assert result["success"] is True
 
     async def test_login_programmatic_two_step(self, mock_cdp):
         tv, cdp = mock_cdp
+        state = {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "AAPL"}
         cdp.evaluate.side_effect = [
-            False,
-            None,
-            True,                     # email found
-            True,                     # fill email
-            False,                    # no password → two-step
-            True,                     # click continue
-            True,                     # fill password
-            True,                     # click sign in
-            "https://www.tradingview.com/chart/",
-            {"isLoading": False, "domBarCount": 100, "modelBars": 500, "validBars": 500, "currentSymbol": "AAPL"},
-            {"isLoading": False, "domBarCount": 100, "modelBars": 501, "validBars": 501, "currentSymbol": "AAPL"},
-            {"isLoading": False, "domBarCount": 100, "modelBars": 501, "validBars": 501, "currentSymbol": "AAPL"},
+            False, None,               # is_logged_in + ad
+            None, None,                # navigate + ad
+            True, None,                # email found + ad
+            True, None,                # fill email + ad
+            False, None,               # no password → two-step + ad
+            True, None,                # click continue + ad
+            True, None,                # fill password + ad
+            True, None,                # click sign in + ad
+            "https://www.tradingview.com/chart/", None,  # URL poll + ad
+            state, None, state, None, state, None,       # wait_for_chart_ready × 3 + ad
         ]
         result = await tv.login(username="u@e.com", password="pass")
         assert result["success"] is True
@@ -901,9 +929,9 @@ class TestAuth:
     async def test_login_programmatic_form_timeout(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
-            False,
-            None,
-            False, False, False,       # email not found
+            False, None,               # is_logged_in + ad
+            None, None,                # navigate + ad
+            False, None, False, None, False, None,  # email not found × 3 + ad
         ]
         result = await tv.login(username="u@e.com", password="pass", timeout=1.5)
         assert result["success"] is False
@@ -919,10 +947,10 @@ class TestAuth:
     async def test_logout_clicks_sign_out(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
-            True,                           # is_logged_in
-            True,                           # click avatar
-            True,                           # click sign out
-            "https://www.tradingview.com/", # URL after logout
+            True, None,                    # is_logged_in + ad
+            True, None,                    # click avatar + ad
+            True, None,                    # click sign out + ad
+            "https://www.tradingview.com/", None,  # URL poll + ad
         ]
         result = await tv.logout()
         assert result["success"] is True
@@ -930,8 +958,8 @@ class TestAuth:
     async def test_logout_avatar_not_found(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
-            True,   # is_logged_in
-            False,  # avatar click failed
+            True, None,   # is_logged_in + ad
+            False, None,  # avatar click failed + ad
         ]
         result = await tv.logout()
         assert result["success"] is False
@@ -940,9 +968,9 @@ class TestAuth:
     async def test_logout_signout_not_found(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
-            True,   # is_logged_in
-            True,   # avatar click
-            False,  # sign out click failed
+            True, None,   # is_logged_in + ad
+            True, None,   # avatar click + ad
+            False, None,  # sign out click failed + ad
         ]
         result = await tv.logout()
         assert result["success"] is False
@@ -951,13 +979,13 @@ class TestAuth:
     async def test_logout_url_unchanged(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
-            True,                           # is_logged_in
-            True,                           # click avatar
-            True,                           # click sign out
-            "https://www.tradingview.com/chart/",  # URL poll 1
-            "https://www.tradingview.com/chart/",  # URL poll 2
-            "https://www.tradingview.com/chart/",  # URL poll 3
-            "https://www.tradingview.com/chart/",  # URL poll 4
+            True, None,                    # is_logged_in + ad
+            True, None,                    # click avatar + ad
+            True, None,                    # click sign out + ad
+            "https://www.tradingview.com/chart/", None,  # URL poll 1 + ad
+            "https://www.tradingview.com/chart/", None,  # URL poll 2 + ad
+            "https://www.tradingview.com/chart/", None,  # URL poll 3 + ad
+            "https://www.tradingview.com/chart/", None,  # URL poll 4 + ad
         ]
         result = await tv.logout(timeout=2)
         assert result["success"] is True
@@ -976,6 +1004,7 @@ class TestPineSourceCaching:
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
             "//@version=5\nindicator(\"My Script\")\nplot(close)",
+            None,  # ad-dismiss from _eval
         ]
         result = await tv.get_pine_source("PUB;85")
         assert result == "//@version=5\nindicator(\"My Script\")\nplot(close)"
@@ -984,6 +1013,7 @@ class TestPineSourceCaching:
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
             "pine_source_123",
+            None,  # ad-dismiss from _eval
         ]
         result = await tv.get_pine_source("PUB;42")
         assert result == "pine_source_123"
@@ -1001,6 +1031,7 @@ class TestPineSourceCaching:
         tv, cdp = mock_cdp
         cdp.evaluate.side_effect = [
             "pine_from_model",
+            None,  # ad-dismiss from _eval
         ]
         result = await tv.get_pine_source("PUB;42", entity_id="abc123")
         assert result == "pine_from_model"
@@ -1023,16 +1054,21 @@ class TestErrorHandling:
 
     async def test_eval_uses_cdp_evaluate(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp.evaluate.side_effect = [[], None, None, None]
+        cdp.evaluate.side_effect = [
+            [], None, None, None, None, None, None, None, None, None,
+        ]
         await tv.connect()
         await tv._eval("1 + 1")
 
     async def test_eval_passes_kwargs(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp.evaluate.side_effect = [[], None, None, None]
+        cdp.evaluate.side_effect = [
+            [], None, None, None, None, None, None, None,
+            "Promise.resolve(42)", None,
+        ]
         await tv.connect()
         await tv._eval("Promise.resolve(42)", await_promise=True)
-        call = cdp.evaluate.call_args_list[-1]
+        call = cdp.evaluate.call_args_list[-2]
         assert call[0][0] == "Promise.resolve(42)"
         assert call[1].get("await_promise") is True
 
@@ -1043,7 +1079,7 @@ class TestScriptGeneration:
     async def test_ohlcv_js_has_bars(self, mock_cdp):
         tv, cdp = mock_cdp
         await tv.get_ohlcv(count=100, summary=True)
-        expr = cdp.evaluate.call_args[0][0]
+        expr = cdp.evaluate.call_args_list[0][0][0]
         assert "bars()._items" in expr
         assert "-100" in expr  # slice with count
 
@@ -1057,7 +1093,7 @@ class TestScriptGeneration:
     async def test_study_values_js_uses_chart_api(self, mock_cdp):
         tv, cdp = mock_cdp
         await tv.get_study_values()
-        expr = cdp.evaluate.call_args[0][0]
+        expr = cdp.evaluate.call_args_list[0][0][0]
         assert "TradingViewApi.chart()" in expr
         assert "dataSourceForId" in expr
         assert "_data._items" in expr

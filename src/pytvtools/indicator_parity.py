@@ -19,7 +19,7 @@ import inspect
 import logging
 from typing import Any
 
-from pytvtools.indicators import rsi, sma, ema, macd, mfi, bbands, atr, srsi, supertrend
+from pytvtools.indicators import rsi, sma, ema, macd, mfi, bbands, atr, srsi, supertrend, dss
 from pytvtools.tv import TV
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,7 @@ _BUILTIN_COMPUTERS: dict[str, Any] = {
     "STD;Average_True_Range": atr,
     "STD;Stochastic_RSI": srsi,
     "STD;Supertrend": supertrend,
+    "PUB;85": dss,
 }
 
 # Maps TV internal input IDs (in_0, in_1, …) to Python function parameter names
@@ -48,6 +49,7 @@ _TV_INPUT_MAP: dict[str, dict[str, str]] = {
     "STD;Average_True_Range": {"in_0": "period"},
     "STD;Stochastic_RSI": {"in_0": "smooth_k", "in_1": "smooth_d", "in_2": "period"},
     "STD;Supertrend": {"in_0": "period", "in_1": "multiplier"},
+    "PUB;85": {"in_0": "pds", "in_1": "ema_len", "in_2": "trigger_len"},
 }
 
 # Maps TV plot names to Python dict keys for multi-plot indicators
@@ -56,6 +58,7 @@ _PLOT_KEY_MAP: dict[str, dict[str, str]] = {
     "STD;Bollinger_Bands": {"Upper": "upper", "Basis": "basis", "Lower": "lower"},
     "STD;Stochastic_RSI": {"K": "k", "D": "d"},
     "STD;Supertrend": {"Up Trend": "up_trend", "Down Trend": "down_trend"},
+    "PUB;85": {"DSS": "dss", "Trigger": "trigger"},
 }
 
 _JS_GET_STUDY_INPUTS: str = """
@@ -89,6 +92,7 @@ _STUDY_ID_ALIASES: dict[str, str] = {
     "SUPERTREND": "STD;Supertrend",
     "STD;SUPERTREND": "STD;Supertrend",
     "ST": "STD;Supertrend",
+    "DSS": "PUB;85",
 }
 
 
@@ -269,10 +273,8 @@ async def compare_indicator(
     if not bars:
         raise ValueError(f"No OHLCV data returned for {symbol} {timeframe}")
 
-    if max_bars is not None:
-        skip = max(0, len(bars) - max_bars)
-        bars = bars[-max_bars:] if skip > 0 else bars
-
+    # Compute Python indicator on ALL bars so recursive/EMA indicators
+    # have enough history to converge before the comparison window.
     timestamps = [b["timestamp"] for b in bars]
     raw = computer(bars, **py_kwargs)
     if isinstance(raw, dict):
@@ -283,14 +285,21 @@ async def compare_indicator(
     else:
         py_values = raw
 
-    mismatches: list[Mismatch] = []
-    matched = 0
-
+    # Determine comparison window: skip warmup (None) and clamp to max_bars
     min_idx = 0
     while min_idx < len(py_values) and py_values[min_idx] is None:
         min_idx += 1
 
-    for i in range(min_idx, len(bars)):
+    compare_start = 0
+    if max_bars is not None and len(bars) > max_bars:
+        compare_start = len(bars) - max_bars
+    if compare_start < min_idx:
+        compare_start = min_idx
+
+    mismatches: list[Mismatch] = []
+    matched = 0
+
+    for i in range(compare_start, len(bars)):
         ts = int(timestamps[i])
         py_val = py_values[i]
         tv_val = tv_values_by_ts.get(ts)
@@ -304,7 +313,7 @@ async def compare_indicator(
         else:
             matched += 1
 
-    total = len(bars) - min_idx
+    total = len(bars) - compare_start
     return ParityReport(
         symbol=symbol,
         timeframe=timeframe,

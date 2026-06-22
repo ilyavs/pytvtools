@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pytvtools.indicators import sma, ema, rsi, macd, mfi, supertrend
+from pytvtools.indicators import sma, ema, rsi, macd, mfi, supertrend, dss
 
 
 def approx(seq):
@@ -282,3 +282,70 @@ class TestSuperTrend:
         # No overlap: same index can't have both up and down
         for i in range(len(bars)):
             assert not (result["up_trend"][i] is not None and result["down_trend"][i] is not None)
+
+
+class TestDSS:
+    def test_empty(self):
+        result = dss([])
+        assert result == {"dss": [], "trigger": []}
+
+    def test_flat_list_raises(self):
+        with pytest.raises(ValueError, match="requires OHLCV"):
+            dss([1.0, 2.0], pds=10)
+
+    def test_too_short(self):
+        bars = [{"high": 100, "low": 90, "close": 95} for _ in range(3)]
+        result = dss(bars, pds=10, ema_len=9, trigger_len=5)
+        assert result["dss"] == [None, None, None]
+        assert result["trigger"] == [None, None, None]
+
+    def test_struct(self):
+        bars = []
+        for i in range(50):
+            bars.append({
+                "high": 100 + i,
+                "low": 90 + i,
+                "close": 95 + i,
+            })
+        result = dss(bars, pds=10, ema_len=9, trigger_len=5)
+        assert "dss" in result
+        assert "trigger" in result
+        assert len(result["dss"]) == 50
+        assert len(result["trigger"]) == 50
+
+    def test_range(self):
+        """DSS values should be between 0 and 100."""
+        import random
+        random.seed(42)
+        bars = []
+        for _ in range(100):
+            h = random.uniform(50, 150)
+            l = h - random.uniform(1, 10)
+            c = random.uniform(l, h)
+            bars.append({"high": h, "low": l, "close": c})
+        result = dss(bars, pds=10, ema_len=9, trigger_len=5)
+        for v in result["dss"]:
+            if v is not None:
+                assert -1e-10 <= v <= 100 + 1e-10, f"DSS out of range: {v}"
+        for v in result["trigger"]:
+            if v is not None:
+                assert -1e-10 <= v <= 100 + 1e-10, f"Trigger out of range: {v}"
+
+    def test_dss_and_trigger_shape(self):
+        """DSS and trigger: trigger has fewer non-None bars (EMA lag)."""
+        import random
+        random.seed(1)
+        bars = []
+        base = 100.0
+        for _ in range(200):
+            high = base + random.uniform(0, 5)
+            low = base - random.uniform(0, 5)
+            close = random.uniform(low, high)
+            bars.append({"high": high, "low": low, "close": close})
+            base += 0.5
+        result = dss(bars, pds=14, ema_len=9, trigger_len=5)
+        assert len(result["dss"]) == 200
+        assert len(result["trigger"]) == 200
+        dss_cnt = sum(1 for v in result["dss"] if v is not None)
+        trig_cnt = sum(1 for v in result["trigger"] if v is not None)
+        assert dss_cnt > trig_cnt > 0

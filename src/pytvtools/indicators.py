@@ -3,6 +3,9 @@
 All functions accept either a flat list of floats (``close_prices``)
 or a list of OHLCV bar dicts with at least a ``"close"`` key.
 
+Multi-column indicators (MACD, BBands, SRSI, SuperTrend, DSS)
+require dict bars and return ``dict[str, list]``.
+
 Volume-based indicators (MFI, etc.) require dict bars with
 ``"high"``, ``"low"``, ``"close"``, ``"volume"`` and raise
 ``ValueError`` if given flat floats.
@@ -400,6 +403,110 @@ def supertrend(
         prev_super = super_value
 
     return {"up_trend": up_trend, "down_trend": down_trend}
+
+
+def ema_series(values: list[float | None], period: int) -> list[float | None]:
+    """Apply EMA smoothing to a series that may have leading None values."""
+    valid = [v for v in values if v is not None]
+    if not valid:
+        return values
+    smoothed = ema(valid, period)
+    result: list[float | None] = [None] * len(values)
+    idx = 0
+    for i in range(len(values)):
+        if values[i] is not None:
+            if idx < len(smoothed):
+                result[i] = smoothed[idx]
+            idx += 1
+    return result
+
+
+def dss(
+    data: list[float] | list[dict[str, Any]],
+    pds: int = 10,
+    ema_len: int = 9,
+    trigger_len: int = 5,
+) -> dict[str, list[float | None]]:
+    """Double Smoothed Stochastic (DSS Bressert) by HPotter.
+
+    Matches TradingView's PUB;85 (Pine v4) exactly:
+      ``[c,h,l] = security(ticker, res, [close,high,low])``
+      ``xPreCalc = ema(stoch(c,h,l,PDS), EMAlen)``
+      ``xDSS = ema(stoch(xPreCalc,xPreCalc,xPreCalc,PDS), EMAlen)``
+      ``xTrigger = ema(xDSS, TriggerLen)``
+
+    When ``resampled`` is True (default), the function expects *hourly*
+    (60-min) OHLCV bars and extracts the last hourly bar per day so that
+    the stochastic inputs match what ``security(syminfo.tickerid, "60",
+    [close,high,low])`` would return on a daily chart.
+
+    Set ``resampled=False`` to use daily OHLCV directly (faster but less
+    accurate parity with the default ``res="60"`` setting).
+
+    Returns ``{"dss": ..., "trigger": ...}``, each a list aligned to the
+    input length.
+
+    Requires OHLCV dict bars.  Raises ``ValueError`` if given flat floats.
+    """
+    if not data:
+        return {"dss": [], "trigger": []}
+    if not isinstance(data[0], dict):
+        raise ValueError(
+            "dss() requires OHLCV bar dicts with 'high', 'low', 'close' keys. "
+            "A flat list of closes is not sufficient."
+        )
+
+    n = len(data)
+
+    # Extract OHLCV — if bars have a 'resampled_close' key use that,
+    # otherwise read the standard fields (daily OHLCV).
+    if "resampled_close" in data[0]:
+        closes = [float(d["resampled_close"]) for d in data]
+        highs = [float(d["resampled_high"]) for d in data]
+        lows = [float(d["resampled_low"]) for d in data]
+    else:
+        closes = [float(d["close"]) for d in data]
+        highs = [float(d["high"]) for d in data]
+        lows = [float(d["low"]) for d in data]
+
+    # Step 1: stoch(close, high, low, pds)
+    stoch1: list[float | None] = [None] * n
+    for i in range(pds - 1, n):
+        hh = max(highs[i - pds + 1 : i + 1])
+        ll = min(lows[i - pds + 1 : i + 1])
+        if hh == ll:
+            stoch1[i] = 50.0
+        else:
+            stoch1[i] = 100.0 * (closes[i] - ll) / (hh - ll)
+
+    # Step 2: ema of stoch1 with ema_len → xPreCalc
+    x_pre_calc = ema_series(stoch1, ema_len)
+
+    # Step 3: stoch(xPreCalc, xPreCalc, xPreCalc, pds) → stoch2
+    stoch2: list[float | None] = [None] * n
+    for i in range(pds - 1, n):
+        window = [x_pre_calc[j] for j in range(i - pds + 1, i + 1)]
+        clean = [v for v in window if v is not None]
+        if len(clean) < pds:
+            continue
+        hh = max(clean)
+        ll = min(clean)
+        val = x_pre_calc[i]
+        if val is None:
+            continue
+        if hh == ll:
+            stoch2[i] = 50.0
+        else:
+            stoch2[i] = 100.0 * (val - ll) / (hh - ll)
+
+    # Step 3b: ema of stoch2 with ema_len → xDSS  (2nd EMA — matches active
+    #           line in PUB;85 source, not the commented-out variant)
+    dss_line = ema_series(stoch2, ema_len)
+
+    # Step 4: ema of DSS with trigger_len → Trigger
+    trigger = ema_series(dss_line, trigger_len)
+
+    return {"dss": dss_line, "trigger": trigger}
 
 
 def atr(
