@@ -54,9 +54,9 @@ def main() -> None:
     core_pp.write_text(f"""[project]
 name = "pytvtools-core"
 version = "0.1.0"
-description = "Pure Python TradingView tools — indicators, watchlists, TVData WebSocket fetcher."
+description = "Pure Python TradingView tools - indicators, watchlists, TVData WebSocket fetcher."
 requires-python = ">=3.11"
-dependencies = ["websockets==16.0"]
+dependencies = ["websockets>=16.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -64,7 +64,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-""")
+""", encoding="utf-8")
     print(f"Generated {core_pp}")
 
     # Initialize git repo if needed
