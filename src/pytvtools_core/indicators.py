@@ -509,6 +509,58 @@ def dss(
     return {"dss": dss_line, "trigger": trigger}
 
 
+def market_cipher_b(
+    data: list[float] | list[dict[str, Any]],
+    channel_length: int = 10,
+    average_length: int = 21,
+) -> dict[str, list[float | None]]:
+    """Market Cipher B WaveTrend oscillator.
+
+    Based on LazyBear's WaveTrend and falconcoin's Market Cipher B free version.
+    Uses HLC3 as the source and computes two WaveTrend lines (WT1, WT2)
+    via sequential EMA and SMA smoothing.
+
+    Requires OHLCV dict bars.  Raises ``ValueError`` if given flat floats.
+
+    Returns ``{"wt1": ..., "wt2": ..., "wt1_minus_wt2": ...}``.
+    """
+    if not data:
+        return {"wt1": [], "wt2": [], "wt1_minus_wt2": []}
+    if not isinstance(data[0], dict):
+        raise ValueError("market_cipher_b requires OHLCV dict bars")
+
+    highs = [float(d["high"]) for d in data]
+    lows = [float(d["low"]) for d in data]
+    closes = [float(d["close"]) for d in data]
+    n = len(data)
+
+    ap = [(highs[i] + lows[i] + closes[i]) / 3.0 for i in range(n)]
+
+    esa_vals = ema(ap, channel_length)
+
+    diff: list[float | None] = [None] * n
+    for i in range(n):
+        if esa_vals[i] is not None:
+            diff[i] = abs(ap[i] - esa_vals[i])
+
+    d_vals = ema_series(diff, channel_length)
+
+    ci: list[float | None] = [None] * n
+    for i in range(n):
+        if esa_vals[i] is not None and d_vals[i] is not None and d_vals[i] != 0:
+            ci[i] = (ap[i] - esa_vals[i]) / (0.015 * d_vals[i])
+
+    wt1 = ema_series(ci, average_length)
+    wt2 = sma_series(wt1, 4)
+
+    wt1_minus_wt2: list[float | None] = [None] * n
+    for i in range(n):
+        if wt1[i] is not None and wt2[i] is not None:
+            wt1_minus_wt2[i] = wt1[i] - wt2[i]
+
+    return {"wt1": wt1, "wt2": wt2, "wt1_minus_wt2": wt1_minus_wt2}
+
+
 def atr(
     data: list[float] | list[dict[str, Any]],
     period: int = 14,

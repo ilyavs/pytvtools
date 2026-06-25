@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pytvtools_core.indicators import sma, ema, rsi, macd, mfi, supertrend, dss
+from pytvtools_core.indicators import sma, ema, rsi, macd, mfi, supertrend, dss, market_cipher_b
 
 
 def approx(seq):
@@ -349,3 +349,54 @@ class TestDSS:
         dss_cnt = sum(1 for v in result["dss"] if v is not None)
         trig_cnt = sum(1 for v in result["trigger"] if v is not None)
         assert dss_cnt > trig_cnt > 0
+
+
+class TestMarketCipherB:
+    def test_empty(self):
+        result = market_cipher_b([])
+        assert result == {"wt1": [], "wt2": [], "wt1_minus_wt2": []}
+
+    def test_flat_list_raises(self):
+        with pytest.raises(ValueError, match="requires OHLCV"):
+            market_cipher_b([1.0, 2.0])
+
+    def test_too_short(self):
+        bars = [{"high": 100, "low": 90, "close": 95} for _ in range(3)]
+        result = market_cipher_b(bars, channel_length=10, average_length=21)
+        assert result["wt1"] == [None, None, None]
+        assert result["wt2"] == [None, None, None]
+        assert result["wt1_minus_wt2"] == [None, None, None]
+
+    def test_struct(self):
+        bars = []
+        for i in range(50):
+            bars.append({
+                "high": 100 + i,
+                "low": 90 + i,
+                "close": 95 + i,
+            })
+        result = market_cipher_b(bars, channel_length=10, average_length=21)
+        assert "wt1" in result
+        assert "wt2" in result
+        assert "wt1_minus_wt2" in result
+        assert len(result["wt1"]) == 50
+        assert len(result["wt2"]) == 50
+        assert len(result["wt1_minus_wt2"]) == 50
+
+    def test_wt2_has_more_leading_none_than_wt1(self):
+        """WT2 has 3 additional leading Nones from SMA(WT1, 4)."""
+        import random
+        random.seed(1)
+        bars = []
+        base = 100.0
+        for _ in range(200):
+            high = base + random.uniform(0, 5)
+            low = base - random.uniform(0, 5)
+            close = random.uniform(low, high)
+            bars.append({"high": high, "low": low, "close": close})
+            base += 0.5
+        result = market_cipher_b(bars, channel_length=10, average_length=21)
+        wt1_cnt = sum(1 for v in result["wt1"] if v is not None)
+        wt2_cnt = sum(1 for v in result["wt2"] if v is not None)
+        assert wt1_cnt > wt2_cnt > 0
+        assert wt1_cnt - wt2_cnt == 3
