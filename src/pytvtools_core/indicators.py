@@ -14,7 +14,7 @@ Usage::
 
     from pytvtools_core.indicators import rsi
 
-    bars = await tv.get_ohlcv(count=500, summary=False)
+    bars = [{"close": 44.34}, {"close": 44.09}]
     closes = [b["close"] for b in bars]
     rsi_vals = rsi(closes, period=14)
 """
@@ -70,8 +70,7 @@ def ema(data: list[float] | list[dict[str, Any]], period: int = 20) -> list[floa
 def rsi(data: list[float] | list[dict[str, Any]], period: int = 14) -> list[float | None]:
     """Relative Strength Index (Wilder's smoothing).
 
-    Uses ``alpha = 1 / period`` for average gain/loss, matching
-    TradingView's built-in RSI.
+    Uses ``alpha = 1 / period`` for average gain/loss.
     """
     prices = _prices(data)
     if len(prices) < period + 1:
@@ -116,8 +115,7 @@ def mfi(data: list[float] | list[dict[str, Any]], period: int = 14) -> list[floa
     Requires OHLCV bar dicts with ``"high"``, ``"low"``, ``"close"``, ``"volume"`` keys.
     Raises ``ValueError`` if given a flat list of floats (no volume data).
 
-    Uses a rolling sum of positive/negative money flow over *period* bars
-    (SMA-equivalent), matching TradingView's built-in MFI.
+    Uses a rolling sum of positive/negative money flow over *period* bars.
     """
     if not data:
         return []
@@ -171,9 +169,6 @@ def mfi(data: list[float] | list[dict[str, Any]], period: int = 14) -> list[floa
 
 def _auto_tick_size(prices: list[float]) -> float:
     """Auto-detect a reasonable tick size from price levels.
-
-    Returns the tick increment that is standard for the given price
-    range (mimics TradingView's symbol-aware tick sizing).
     """
     if not prices:
         return 1.0
@@ -321,8 +316,6 @@ def supertrend(
 ) -> dict[str, list[float | None]]:
     """SuperTrend indicator.
 
-    Matches TradingView's built-in ``ta.supertrend()`` algorithm exactly.
-
     Returns ``{"up_trend": ..., "down_trend": ...}``, each a list aligned
     to the input length.  Only one plot has a non-None value at any bar.
 
@@ -428,8 +421,6 @@ def dss(
     trigger_len: int = 5,
 ) -> dict[str, list[float | None]]:
     """Double Smoothed Stochastic (DSS Bressert) by HPotter.
-
-    Matches TradingView's PUB;85 (Pine v4) exactly:
       ``[c,h,l] = security(ticker, res, [close,high,low])``
       ``xPreCalc = ema(stoch(c,h,l,PDS), EMAlen)``
       ``xDSS = ema(stoch(xPreCalc,xPreCalc,xPreCalc,PDS), EMAlen)``
