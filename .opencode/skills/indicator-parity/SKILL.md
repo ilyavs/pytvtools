@@ -11,7 +11,7 @@ Add a new indicator with Python and Pine Script implementations, register in the
 
 | Layer | File | Role |
 |-------|------|------|
-| Python impl | `src/pytvtools/indicators.py` | Pure Python computation |
+| Python impl | `src/pytvtools_core/indicators.py` | Pure Python computation |
 | Pine ref | `pine_indicators/<name>.pine` | Reference Pine Script (mimics built-in) |
 | Python≤>TV bridge | `src/pytvtools/indicator_parity.py` | Maps TV study ID → Python function, inputs, plot names |
 | Pine≤>TV bridge | `src/pytvtools/pine_parity.py` | Registers Pine files for pine-vs-built-in comparison |
@@ -58,14 +58,14 @@ Common TV study IDs differ from short names:
 
 Input ID order doesn't always match order in the settings panel — read the raw IDs from `getInputValues()`.
 
-### 3. Implement Python function in `src/pytvtools/indicators.py`
+### 3. Implement Python function in `src/pytvtools_core/indicators.py`
 
 **Hard rule: never duplicate parity-tested building blocks.**
 If your indicator depends on another indicator (e.g. ATR for SuperTrend, SMA for SRSI), import and call the existing parity-tested function from the same module instead of inlining the computation. Every indicator in `indicators.py` that is registered in `_BUILTIN_COMPUTERS` is already parity-tested against TV's built-in — using it guarantees your ATR/SMA/etc. exactly match TV's output.
 
 ```python
 # ✅ Correct: reuse existing parity-tested implementation
-from pytvtools.indicators import atr
+from pytvtools_core.indicators import atr
 atr_vals = atr(data, period)
 
 # ❌ Wrong: duplicated ATR logic that will drift from the parity-tested version
@@ -138,7 +138,7 @@ Edit four registries:
 
 Also update the import at the top of `indicator_parity.py`:
 ```python
-from pytvtools.indicators import rsi, sma, ema, macd, mfi, bbands, atr, srsi, my_indicator
+from pytvtools_core.indicators import rsi, sma, ema, macd, mfi, bbands, atr, srsi, my_indicator
 ```
 
 ### 6. Register in `src/pytvtools/pine_parity.py`
@@ -257,7 +257,7 @@ git push
 
 | File | What it contains |
 |------|------------------|
-| `src/pytvtools/indicators.py` | All Python implementations |
+| `src/pytvtools_core/indicators.py` | All Python implementations |
 | `src/pytvtools/indicator_parity.py` | `_BUILTIN_COMPUTERS`, `_TV_INPUT_MAP`, `_PLOT_KEY_MAP`, `_STUDY_ID_ALIASES` |
 | `src/pytvtools/pine_parity.py` | `_PINE_INDICATORS` registry |
 | `pine_indicators/` | Reference Pine Script files |

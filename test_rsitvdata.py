@@ -1,7 +1,7 @@
 """Test RSI parity using TVData for OHLCV."""
 import asyncio
 from pytvtools import TV, TVData
-from pytvtools.indicators import rsi
+from pytvtools_core.indicators import rsi
 
 async def main():
     async with TVData() as d:

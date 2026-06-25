@@ -19,7 +19,7 @@ import inspect
 import logging
 from typing import Any
 
-from pytvtools.indicators import rsi, sma, ema, macd, mfi, bbands, atr, srsi, supertrend, dss
+from pytvtools_core.indicators import rsi, sma, ema, macd, mfi, bbands, atr, srsi, supertrend, dss
 from pytvtools.tv import TV
 
 logger = logging.getLogger(__name__)

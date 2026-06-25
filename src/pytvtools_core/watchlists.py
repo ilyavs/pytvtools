@@ -3,7 +3,7 @@
 All watchlists are frozen ``Watchlist`` instances with a ``name`` and
 immutable ``symbols`` tuple.  Use them directly with ``Collector``::
 
-    from pytvtools.watchlists import SPDR_SECTORS
+    from pytvtools_core.watchlists import SPDR_SECTORS
     from pytvtools import Collector, CollectorConfig
 
     config = CollectorConfig(

@@ -2,7 +2,7 @@
 
 import pytest
 
-from pytvtools.watchlists import (
+from pytvtools_core.watchlists import (
     Watchlist,
     SPDR_SECTORS,
     SPDR_INDUSTRIES,

@@ -12,7 +12,7 @@ Volume-based indicators (MFI, etc.) require dict bars with
 
 Usage::
 
-    from pytvtools.indicators import rsi
+    from pytvtools_core.indicators import rsi
 
     bars = await tv.get_ohlcv(count=500, summary=False)
     closes = [b["close"] for b in bars]

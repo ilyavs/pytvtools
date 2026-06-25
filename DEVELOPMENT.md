@@ -15,8 +15,12 @@ docker exec docker-pytvtools-1 echo ok
 docker compose -f docker/docker-compose.yml up -d
 ```
 
-The package is installed in editable mode at `/app`. Inside the container,
-no reinstall is needed after source edits.
+Both packages are installed in editable mode at `/app`. Inside the container,
+no reinstall is needed after source edits:
+
+```bash
+pip install -e src/pytvtools_core && pip install -e .
+```
 
 ## Running commands
 
@@ -36,33 +40,40 @@ docker exec -w /app docker-pytvtools-1 python examples/basic.py
 
 ## Architecture
 
-```
-Host edits → src/pytvtools/*.py → mounted to /app → runs in container
-```
+Two packages in one repo:
 
-| File | Purpose |
-|------|---------|
-| `src/pytvtools/tv.py` | `TV` — all high-level methods (CDP-based) |
-| `src/pytvtools/tvdata.py` | `TVData` — direct WebSocket OHLCV fetcher (no CDP) |
-| `src/pytvtools/cdp.py` | `CdpConnection` — WebSocket transport, `Runtime.evaluate` |
-| `src/pytvtools/chrome.py` | `Chrome` — launch/stop/restart headless Chrome |
-| `src/pytvtools/collector.py` | `Collector` — multi-symbol batch (CDP-based, studies too); `TVDataCollector` — OHLCV-only batch (no Chrome, wraps `get_ohlcv_multi`) |
-| `src/pytvtools/mcp_server.py` | MCP server wrapping all TV methods |
-| `src/pytvtools/__init__.py` | Public exports |
-| `src/pytvtools/watchlists.py` | `Watchlist` — frozen dataclass + predefined watchlists |
-| `src/pytvtools/indicators.py` | Pure-Python SMA, EMA, RSI, MACD implementations |
-| `src/pytvtools/indicator_parity.py` | `compare_indicator()` — Python vs TV indicator comparison |
-| `tests/test_tv.py` | Unit tests for TV methods |
-| `tests/test_tvdata.py` | Unit tests for TVData direct WS fetcher |
-| `tests/test_cdp.py` | Unit tests for CDP transport |
-| `tests/test_chrome.py` | Unit tests for Chrome lifecycle |
-| `tests/test_indicators.py` | Unit tests for Python indicators |
-| `tests/test_indicator_parity.py` | Unit tests for comparison utility |
-| `tests/test_collector.py` | Unit tests for Collector (CDP-based) |
-| `tests/test_tvdata_collector.py` | Unit tests for TVDataCollector (no CDP) |
-| `tests/test_watchlists.py` | Unit tests for Watchlist |
-| `tests/test_integration.py` | Runs all examples as integration tests |
-| `examples/` | Runnable examples (also integration test targets) |
+| Package | Directory | Publishes as | Contents |
+|---------|-----------|-------------|----------|
+| **CDP** | `src/pytvtools/` | `pytvtools` | CDP-dependent code |
+| **Core** | `src/pytvtools_core/` | `pytvtools-core` | indicators, watchlists, TVData |
+
+The core package is standalone — can be synced to a public repo via `python scripts/sync_core.py`.
+
+| File | Package | Purpose |
+|------|---------|---------|
+| `src/pytvtools/tv.py` | pytvtools | `TV` — all high-level methods (CDP-based) |
+| `src/pytvtools/cdp.py` | pytvtools | `CdpConnection` — WebSocket transport, `Runtime.evaluate` |
+| `src/pytvtools/chrome.py` | pytvtools | `Chrome` — launch/stop/restart headless Chrome |
+| `src/pytvtools/collector.py` | pytvtools | `Collector` — multi-symbol batch (CDP-based, studies too); `TVDataCollector` — OHLCV-only batch |
+| `src/pytvtools/indicator_parity.py` | pytvtools | `compare_indicator()` — Python vs TV indicator comparison |
+| `src/pytvtools/pine_parity.py` | pytvtools | Pine Script parity checks |
+| `src/pytvtools/mcp_server.py` | pytvtools | MCP server wrapping all TV methods |
+| `src/pytvtools/__init__.py` | pytvtools | Public exports |
+| `src/pytvtools_core/indicators.py` | pytvtools-core | Pure-Python SMA, EMA, RSI, MACD implementations |
+| `src/pytvtools_core/watchlists.py` | pytvtools-core | `Watchlist` — frozen dataclass + predefined watchlists |
+| `src/pytvtools_core/tvdata.py` | pytvtools-core | `TVData` — direct WebSocket OHLCV fetcher (no CDP) |
+| `tests/test_tv.py` | both | Unit tests for TV methods |
+| `tests/test_tvdata.py` | pytvtools-core | Unit tests for TVData direct WS fetcher |
+| `tests/test_cdp.py` | pytvtools | Unit tests for CDP transport |
+| `tests/test_chrome.py` | pytvtools | Unit tests for Chrome lifecycle |
+| `tests/test_indicators.py` | pytvtools-core | Unit tests for Python indicators |
+| `tests/test_indicator_parity.py` | pytvtools | Unit tests for comparison utility |
+| `tests/test_pine_parity.py` | pytvtools | Unit tests for Pine parity |
+| `tests/test_collector.py` | pytvtools | Unit tests for Collector (CDP-based) |
+| `tests/test_tvdata_collector.py` | pytvtools | Unit tests for TVDataCollector |
+| `tests/test_watchlists.py` | pytvtools-core | Unit tests for Watchlist |
+| `tests/test_integration.py` | pytvtools | Runs all examples as integration tests |
+| `examples/` | both | Runnable examples (also integration test targets) |
 
 ## Implementation rules
 

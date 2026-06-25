@@ -17,7 +17,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 
 from pytvtools import TV, Collector, CollectorConfig, wait_for_cdp
-from pytvtools.watchlists import SPDR_SECTORS
+from pytvtools_core.watchlists import SPDR_SECTORS
 
 logging.basicConfig(
     level=logging.INFO,

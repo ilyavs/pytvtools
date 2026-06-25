@@ -5,19 +5,35 @@ Pure Python CDP library for TradingView in Chrome. No Node.js, no submodules.
 > **Start here:** [`DEVELOPMENT.md`](DEVELOPMENT.md) — container setup, command patterns,
 > architecture, and implementation rules every agent must follow before editing code.
 
+## Repo structure
+
+Two packages in one repo:
+
+| Package | Directory | Publishes as | Contents |
+|---------|-----------|-------------|----------|
+| **CDP** | `src/pytvtools/` | `pytvtools` | `cdp.py`, `chrome.py`, `tv.py`, `collector.py`, `indicator_parity.py`, `pine_parity.py`, `mcp_server.py` |
+| **Core** | `src/pytvtools_core/` | `pytvtools-core` | `indicators.py`, `watchlists.py`, `tvdata.py` |
+
+The core package is standalone — can be synced to a public repo via `python scripts/sync_core.py`. During development, install both editable:
+
+    pip install -e src\pytvtools_core
+    pip install -e .
+
+**Import convention:** CDP code imports from `pytvtools_core` (e.g. `from pytvtools_core.indicators import rsi`). Never import from `pytvtools` inside core files.
+
 ## Key modules
 
-| File | What |
-|------|------|
-| `src/pytvtools/cdp.py` | `CdpConnection` — WebSocket transport for CDP `Runtime.evaluate` |
-| `src/pytvtools/chrome.py` | `Chrome` — launch/stop/restart headless Chrome with CDP |
-| `src/pytvtools/tv.py` | `TV` — high-level TradingView client (CDP-based) |
-| `src/pytvtools/tvdata.py` | `TVData` — direct WebSocket OHLCV fetcher (no CDP, fast) |
-| `src/pytvtools/collector.py` | `Collector` — multi-symbol batch (CDP-based, studies too); `TVDataCollector` — OHLCV-only batch (no Chrome, wraps `get_ohlcv_multi`) |
-| `src/pytvtools/watchlists.py` | `Watchlist` — frozen dataclass + predefined watchlists |
-| `src/pytvtools/indicators.py` | Pure-Python SMA, EMA, RSI, MACD implementations |
-| `src/pytvtools/indicator_parity.py` | `compare_indicator()` — verify Python vs TV indicator outputs match |
-| `src/pytvtools/__init__.py` | Re-exports |
+| File | Package | What |
+|------|---------|------|
+| `src/pytvtools/cdp.py` | pytvtools | `CdpConnection` — WebSocket transport for CDP `Runtime.evaluate` |
+| `src/pytvtools/chrome.py` | pytvtools | `Chrome` — launch/stop/restart headless Chrome with CDP |
+| `src/pytvtools/tv.py` | pytvtools | `TV` — high-level TradingView client (CDP-based) |
+| `src/pytvtools/collector.py` | pytvtools | `Collector` — multi-symbol batch (CDP-based, studies too); `TVDataCollector` — OHLCV-only batch |
+| `src/pytvtools/indicator_parity.py` | pytvtools | `compare_indicator()` — verify Python vs TV indicator outputs match |
+| `src/pytvtools/__init__.py` | pytvtools | Re-exports |
+| `src/pytvtools_core/indicators.py` | pytvtools-core | Pure-Python SMA, EMA, RSI, MACD implementations |
+| `src/pytvtools_core/watchlists.py` | pytvtools-core | `Watchlist` — frozen dataclass + predefined watchlists |
+| `src/pytvtools_core/tvdata.py` | pytvtools-core | `TVData` — direct WebSocket OHLCV fetcher (no CDP, fast) |
 
 ## Usage
 
@@ -242,7 +258,7 @@ Record schema (parquet/JSON):
 ## Python indicators
 
 ```python
-from pytvtools.indicators import sma, ema, rsi, macd, mfi
+from pytvtools_core.indicators import sma, ema, rsi, macd, mfi
 
 bars = await tv.get_ohlcv(count=500, summary=False)
 closes = [b["close"] for b in bars]

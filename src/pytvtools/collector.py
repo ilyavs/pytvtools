@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from pytvtools.tv import TV
-from pytvtools.tvdata import TVData
+from pytvtools_core.tvdata import TVData
 
 
 _PYARROW: tuple | None = None

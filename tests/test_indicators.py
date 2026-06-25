@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pytvtools.indicators import sma, ema, rsi, macd, mfi, supertrend, dss
+from pytvtools_core.indicators import sma, ema, rsi, macd, mfi, supertrend, dss
 
 
 def approx(seq):

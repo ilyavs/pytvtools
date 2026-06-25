@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from pytvtools.tvdata import TVData, _session_id
+from pytvtools_core.tvdata import TVData, _session_id
 
 
 def _tv_frame(msg_type: str, params: list) -> str:
@@ -205,7 +205,7 @@ class TestTVData:
         """TVData works as an async context manager."""
         ws = AsyncMock()
         ws.close = AsyncMock()
-        with patch("pytvtools.tvdata._ws_connect", AsyncMock(return_value=ws)):
+        with patch("pytvtools_core.tvdata._ws_connect", AsyncMock(return_value=ws)):
             async with TVData() as td:
                 assert td._ws is not None
             ws.close.assert_awaited_once()
@@ -252,7 +252,7 @@ class TestTVDataMulti:
 
     async def test_get_ohlcv_multi_basic(self):
         """Multiple symbols fetched in parallel."""
-        with patch("pytvtools.tvdata._ws_connect", AsyncMock()):
+        with patch("pytvtools_core.tvdata._ws_connect", AsyncMock()):
             with patch.object(TVData, "get_ohlcv") as mock_get:
                 async def side_effect(sym, *args, **kwargs):
                     return {"symbol": sym, "bars": 100}
@@ -270,7 +270,7 @@ class TestTVDataMulti:
 
     async def test_get_ohlcv_multi_error_isolation(self):
         """An error for one symbol doesn't affect others."""
-        with patch("pytvtools.tvdata._ws_connect", AsyncMock()):
+        with patch("pytvtools_core.tvdata._ws_connect", AsyncMock()):
             with patch.object(TVData, "get_ohlcv") as mock_get:
                 async def side_effect(sym, *args, **kwargs):
                     if sym == "B":

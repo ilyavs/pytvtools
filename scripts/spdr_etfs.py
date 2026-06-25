@@ -1,6 +1,6 @@
 """Fetch full daily history for all SPDR sector & industry ETFs via TVDataCollector.
 
-Uses the predefined watchlists from pytvtools.watchlists.
+Uses the predefined watchlists from pytvtools_core.watchlists.
 Saves parquet + JSON to a directory of your choice.
 
 Usage:
@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from pytvtools import TVDataCollector
-from pytvtools.watchlists import SPDR_ALL
+from pytvtools_core.watchlists import SPDR_ALL
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
