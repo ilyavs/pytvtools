@@ -14,7 +14,7 @@ Two packages in one repo:
 | **CDP** | `src/pytvtools/` | `pytvtools` | `cdp.py`, `chrome.py`, `tv.py`, `collector.py`, `indicator_parity.py`, `pine_parity.py`, `mcp_server.py` |
 | **Core** | `src/pytvtools_core/` | `pytvtools-core` | `indicators.py`, `watchlists.py`, `tvdata.py` |
 
-The core package is standalone — can be synced to a public repo via `python scripts/sync_core.py`. During development, install both editable:
+The core package is standalone — synced to [pytvtools-core](https://github.com/ilyavs/pytvtools-core) via `python scripts/sync_core.py`. **Never push to the core repo without explicit user approval.** During development, install both editable:
 
     pip install -e src\pytvtools_core
     pip install -e .
