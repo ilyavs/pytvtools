@@ -19,7 +19,7 @@ import inspect
 import logging
 from typing import Any
 
-from pytvtools_core.indicators import rsi, sma, ema, macd, mfi, bbands, atr, srsi, supertrend, dss
+from pytvtools_core.indicators import rsi, sma, ema, macd, mfi, bbands, atr, srsi, supertrend, dss, market_cipher_b
 from pytvtools.tv import TV
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,7 @@ _BUILTIN_COMPUTERS: dict[str, Any] = {
     "STD;Stochastic_RSI": srsi,
     "STD;Supertrend": supertrend,
     "PUB;85": dss,
+    "PUB;ULSuJHspklYwmfZRjRObSo0BLF6PdP2Y": market_cipher_b,
 }
 
 # Maps TV internal input IDs (in_0, in_1, …) to Python function parameter names
@@ -50,6 +51,7 @@ _TV_INPUT_MAP: dict[str, dict[str, str]] = {
     "STD;Stochastic_RSI": {"in_0": "smooth_k", "in_1": "smooth_d", "in_2": "period"},
     "STD;Supertrend": {"in_0": "period", "in_1": "multiplier"},
     "PUB;85": {"in_0": "pds", "in_1": "ema_len", "in_2": "trigger_len"},
+    "PUB;ULSuJHspklYwmfZRjRObSo0BLF6PdP2Y": {"in_0": "channel_length", "in_1": "average_length"},
 }
 
 # Maps TV plot names to Python dict keys for multi-plot indicators
@@ -59,6 +61,7 @@ _PLOT_KEY_MAP: dict[str, dict[str, str]] = {
     "STD;Stochastic_RSI": {"K": "k", "D": "d"},
     "STD;Supertrend": {"Up Trend": "up_trend", "Down Trend": "down_trend"},
     "PUB;85": {"DSS": "dss", "Trigger": "trigger"},
+    "PUB;ULSuJHspklYwmfZRjRObSo0BLF6PdP2Y": {"wt1": "wt1", "wt2": "wt2"},
 }
 
 _JS_GET_STUDY_INPUTS: str = """
@@ -93,6 +96,9 @@ _STUDY_ID_ALIASES: dict[str, str] = {
     "STD;SUPERTREND": "STD;Supertrend",
     "ST": "STD;Supertrend",
     "DSS": "PUB;85",
+    "CIPHER_B": "PUB;ULSuJHspklYwmfZRjRObSo0BLF6PdP2Y",
+    "MARKET_CIPHER_B": "PUB;ULSuJHspklYwmfZRjRObSo0BLF6PdP2Y",
+    "MCB": "PUB;ULSuJHspklYwmfZRjRObSo0BLF6PdP2Y",
 }
 
 
