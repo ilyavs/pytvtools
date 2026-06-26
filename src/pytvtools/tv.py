@@ -197,13 +197,18 @@ class TV:
         return templates or []
 
     async def _get_study_ids(self) -> list[str]:
-        ids = await self._eval(f"""
-        (function() {{
-            var studies = {_CHART_API}.getAllStudies() || [];
-            return studies.map(function(s) {{ return s.id; }});
-        }})()
-        """)
-        return ids or []
+        try:
+            ids = await self._eval(f"""
+            (function() {{
+                try {{
+                    var studies = {_CHART_API}.getAllStudies() || [];
+                    return studies.map(function(s) {{ return s.id; }});
+                }} catch(e) {{ return []; }}
+            }})()
+            """)
+            return ids or []
+        except Exception:
+            return []
 
     async def disconnect(self) -> None:
         if self._cdp:
@@ -768,31 +773,32 @@ class TV:
         """Check if currently logged in to a TradingView account."""
         result = await self._eval("""
         (function() {
-            // Check TradingView internal user object
             try {
-                var user = window.TradingViewApi && window.TradingViewApi._user;
-                if (user && user.id) return true;
+                // 1. Internal user object (most reliable)
+                var u = window.TradingViewApi && window.TradingViewApi._user;
+                if (u && u.id) return true;
             } catch(e) {}
-            // Check for user avatar / profile element
             try {
+                // 2. User menu button visible on chart
                 var el = document.querySelector(
                     '[data-name="header-user-profile"], ' +
                     '[class*="userMenu"], ' +
-                    '[class*="avatar"]'
+                    '[class*="avatar"]' +
+                    'button[aria-label*="user" i]'
                 );
                 if (el && el.offsetParent !== null) return true;
             } catch(e) {}
-            // On the chart page: profile buttons only when logged in
             try {
-                var has_signin = false, has_profile = false;
+                // 3. "Publish" button = logged in, "Sign in" button = logged out
+                var has_signin = false, has_publish = false;
                 var btns = document.querySelectorAll('button');
                 for (var i = 0; i < btns.length; i++) {
                     var t = btns[i].textContent.trim().toLowerCase();
                     if (t === 'sign in' || t === 'log in') has_signin = true;
-                    if (t === 'publish') has_profile = true;
+                    if (t === 'publish') has_publish = true;
                 }
-                if (has_profile) return true;
-                if (!has_signin && document.querySelector('[class*="chart" i]')) return true;
+                if (has_publish) return true;
+                if (has_signin) return false;
             } catch(e) {}
             return false;
         })()
@@ -804,6 +810,7 @@ class TV:
         username: str | None = None,
         password: str | None = None,
         timeout: float = 120,
+        force: bool = False,
     ) -> dict[str, Any]:
         """Log in to a TradingView account.
 
@@ -822,6 +829,9 @@ class TV:
             Account password.  Omit for manual mode.
         timeout : float
             Maximum seconds to wait (default 120).
+        force : bool
+            If True, skip the ``is_logged_in()`` check and clear cookies first
+            so the sign-in form always appears.  Useful for switching accounts.
 
         Returns
         -------
@@ -830,10 +840,20 @@ class TV:
         """
         import asyncio
 
-        if await self.is_logged_in():
+        if not force and await self.is_logged_in():
             return {"success": True, "already_logged_in": True}
 
         if username and password:
+            if force:
+                # Clear cookies so the sign-in form doesn't redirect away
+                try:
+                    await self._cdp.send_command("Network.clearBrowserCookies")
+                    await self._cdp.send_command("Storage.clearDataForOrigin", {
+                        "origin": "https://www.tradingview.com",
+                        "storageTypes": "cookies,local_storage,indexeddb,websql,cache_storage",
+                    })
+                except Exception:
+                    pass
             try:
                 return await self._login_programmatic(username, password, timeout)
             except Exception:
@@ -862,7 +882,8 @@ class TV:
 
         await self._eval("window.location.href = 'https://www.tradingview.com/accounts/signin/'")
 
-        # Wait for the email input
+        # Wait for the email input (with one retry to click "Email" button)
+        found_email = False
         for _ in range(int(timeout / 0.5)):
             has_email = await self._eval("""
             (function() {
@@ -871,13 +892,31 @@ class TV:
                     'input[name="username"], input[name="id_username"], ' +
                     'input[autocomplete="username"]'
                 );
-                return !!el;
+                if (el && el.offsetParent !== null) return 'visible';
+                if (el) return 'exists';
+                return false;
             })()
             """)
             if has_email:
+                found_email = True
                 break
+            # Check if we need to click the "Email" button first
+            if _ == 10:
+                await self._eval("""
+                (function() {
+                    var btns = document.querySelectorAll('button');
+                    for (var b of btns) {
+                        var t = b.textContent.trim();
+                        if ((t === 'Email' || t === 'EmailEmail') && b.offsetParent !== null) {
+                            b.click(); return true;
+                        }
+                    }
+                    return false;
+                })()
+                """)
             await asyncio.sleep(0.5)
-        else:
+
+        if not found_email:
             return {"success": False, "error": "Sign-in form did not load within timeout"}
 
         # Fill email
@@ -960,11 +999,28 @@ class TV:
         })()
         """)
 
-        # Wait for redirect to chart
+        # Wait for redirect away from sign-in page
         start = asyncio.get_running_loop().time()
         while asyncio.get_running_loop().time() - start < timeout:
-            url = await self._eval("window.location.href")
-            if url and "/chart/" in url:
+            url = await self._eval("window.location.href") or ""
+
+            # Check for captcha / 2fa blocks
+            body = (await self._eval("document.body.innerText.substring(0,500)") or "").lower()
+            if "captcha" in body:
+                return {"success": False, "error": "CAPTCHA challenge — cannot log in programmatically"}
+            if any(t in body for t in ("two-factor", "2fa", "authenticator", "verification code")):
+                return {"success": False, "error": "Two-factor authentication required — cannot log in programmatically"}
+
+            # Direct to chart — success
+            if "/chart/" in url and "/signin" not in url:
+                ready = await self.wait_for_chart_ready(
+                    timeout=max(timeout - (asyncio.get_running_loop().time() - start), 5)
+                )
+                if ready:
+                    return {"success": True}
+            # Non-signin URL (homepage, etc.) — navigate to chart
+            if url and "/signin" not in url and "/chart/" not in url:
+                await self._eval("window.location.href = 'https://www.tradingview.com/chart/'")
                 ready = await self.wait_for_chart_ready(
                     timeout=max(timeout - (asyncio.get_running_loop().time() - start), 5)
                 )
@@ -976,7 +1032,8 @@ class TV:
     async def logout(self, timeout: float = 10) -> dict[str, Any]:
         """Log out of the current TradingView account.
 
-        Clicks the user avatar menu and selects "Sign Out".
+        Attempts UI logout first (click avatar -> sign out), then falls
+        back to clearing browser cookies via CDP if the UI path fails.
 
         Parameters
         ----------
@@ -993,21 +1050,23 @@ class TV:
         if not await self.is_logged_in():
             return {"success": True, "already_logged_out": True}
 
-        # Click the user avatar / profile button in the header
+        # --- Method 1: UI click path ---
         avatar_clicked = await self._eval("""
         (function() {
-            var targets = document.querySelectorAll(
-                '[data-name="header-user-profile"], ' +
-                'button[class*="avatar"], ' +
-                'button[class*="userMenu"], ' +
-                '[class*="userWidget"]'
-            );
-            for (var i = 0; i < targets.length; i++) {
-                if (targets[i].offsetParent !== null) {
-                    targets[i].click();
-                    return true;
-                }
+            var sel = [
+                '[data-name="header-user-profile"]',
+                'button[class*="avatar"]',
+                'button[class*="userMenu"]',
+                '[class*="userWidget"]',
+                'button[aria-label*="user" i]',
+                'button[aria-label*="profile" i]',
+                'button[aria-label*="account" i]',
+            ];
+            for (var s of sel) {
+                var el = document.querySelector(s);
+                if (el && el.offsetParent !== null) { el.click(); return true; }
             }
+            // Try finding any img with avatar/user class and clicking its parent
             var imgs = document.querySelectorAll('img[class*="avatar"], img[class*="user"]');
             for (var i = 0; i < imgs.length; i++) {
                 var btn = imgs[i].closest('button');
@@ -1016,52 +1075,64 @@ class TV:
             return false;
         })()
         """)
-        if not avatar_clicked:
-            return {"success": False, "error": "Could not find user avatar button"}
-        await asyncio.sleep(0.5)
-
-        # Click "Sign Out" in the dropdown menu
-        signout_clicked = await self._eval("""
-        (function() {
-            var items = document.querySelectorAll(
-                '[role="menuitem"], [role="option"], ' +
-                'div[class*="menuItem"], a[class*="menuItem"]'
-            );
-            for (var i = 0; i < items.length; i++) {
-                var t = items[i].textContent.trim().toLowerCase();
-                if (t === 'sign out') {
-                    items[i].click();
-                    return true;
+        if avatar_clicked:
+            await asyncio.sleep(1)
+            signout_clicked = await self._eval("""
+            (function() {
+                // Look in any visible popup/menu/dropdown
+                var containers = document.querySelectorAll(
+                    '[role="menu"], [role="listbox"], [class*="dropdown"], ' +
+                    '[class*="popup"], [class*="menu"], ' +
+                    'div[class*="overlay"]'
+                );
+                for (var c = 0; c < containers.length; c++) {
+                    if (containers[c].offsetParent === null) continue;
+                    var items = containers[c].querySelectorAll('li, a, div, button, span');
+                    for (var i = 0; i < items.length; i++) {
+                        if (items[i].textContent.trim().toLowerCase() === 'sign out') {
+                            items[i].click();
+                            return true;
+                        }
+                    }
                 }
-            }
-            var containers = document.querySelectorAll(
-                '[role="menu"], [role="listbox"], [class*="dropdown"], ' +
-                '[class*="popup"], [class*="menu"]'
-            );
-            for (var c = 0; c < containers.length; c++) {
-                if (containers[c].offsetParent === null) continue;
-                var items = containers[c].querySelectorAll('li, a, div, button');
-                for (var i = 0; i < items.length; i++) {
-                    if (items[i].textContent.trim().toLowerCase() === 'sign out') {
-                        items[i].click();
+                // Also search the full document
+                var all = document.querySelectorAll('li, a, div, button, span');
+                for (var i = 0; i < all.length; i++) {
+                    if (all[i].offsetParent !== null &&
+                        all[i].textContent.trim().toLowerCase() === 'sign out') {
+                        all[i].click();
                         return true;
                     }
                 }
-            }
-            return false;
-        })()
-        """)
-        if not signout_clicked:
-            return {"success": False, "error": "Could not find 'Sign Out' in the user menu"}
+                return false;
+            })()
+            """)
+            if signout_clicked:
+                start = asyncio.get_running_loop().time()
+                while asyncio.get_running_loop().time() - start < timeout:
+                    url = await self._eval("window.location.href")
+                    if url and "/chart/" not in url:
+                        return {"success": True}
+                    await asyncio.sleep(1)
+                return {"success": True, "note": "Sign Out clicked, but URL did not change"}
 
-        # Wait for redirect away from chart
-        start = asyncio.get_running_loop().time()
-        while asyncio.get_running_loop().time() - start < timeout:
-            url = await self._eval("window.location.href")
-            if url and "/chart/" not in url:
-                return {"success": True}
-            await asyncio.sleep(1)
-        return {"success": True, "note": "Sign Out clicked, but URL did not change"}
+        # --- Method 2: CDP cookie clearing ---
+        try:
+            await self._cdp.send_command("Network.clearBrowserCookies")
+            await self._cdp.send_command("Storage.clearDataForOrigin", {
+                "origin": "https://www.tradingview.com",
+                "storageTypes": "cookies,local_storage,indexeddb,websql,cache_storage",
+            })
+            await self._eval("localStorage.clear(); sessionStorage.clear()")
+            # Navigate to chart to verify
+            await self._eval("window.location.href = 'https://www.tradingview.com/chart/'")
+            await asyncio.sleep(3)
+            logged_in = await self.is_logged_in()
+            if not logged_in:
+                return {"success": True, "method": "cdp_clear"}
+            return {"success": False, "error": "CDP cookie clearing did not log out"}
+        except Exception as e:
+            return {"success": False, "error": f"Logout failed: {e}"}
 
     async def set_indicator_inputs(
         self, entity_id: str, inputs: dict[str, Any]

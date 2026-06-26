@@ -138,7 +138,7 @@ f_calc_vah_val(poc_idx, va_pct, n) =>
 
 // -- Main --
 period_tf = f_get_period_tf(period_unit, period_mult)
-is_new_period = change(time(period_tf)) or bar_index == 0
+is_new_period = ta.change(time(period_tf)) != 0 or bar_index == 0
 
 if is_new_period
     if bar_index > 0 and array.size(row_volume) > 0
@@ -162,9 +162,9 @@ plot(vah_price, "VAH", color.blue, linewidth=1)
 plot(val_price, "VAL", color.blue, linewidth=1)
 
 if extend_poc and not na(poc_price)
-    if change(poc_price)
+    if ta.change(poc_price) != 0
         line.delete(poc_line)
-        poc_line := line.new(bar_index, poc_price, bar_index + 1, poc_price, color.purple, width=2, extend=extend.right)
+        poc_line := line.new(bar_index, poc_price, bar_index + 1, poc_price, color=color.purple, width=2, extend=extend.right)
     if not na(poc_line) and high >= poc_price and low <= poc_price
         line.delete(poc_line)
         poc_line := na

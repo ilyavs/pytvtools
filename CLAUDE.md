@@ -121,10 +121,27 @@ and connects to Chrome at `localhost:9222` (Docker port mapping).
 
 The ``login`` MCP tool resolves credentials in this order:
 
-1. **Config file** — ``~/.tv/config`` (or ``$TV_CONFIG_PATH``) with a
-   ``username`` and ``password`` key, e.g. ``{"username": "…", "password": "…"}``.
+1. **Named profile in config** — ``profiles.<name>.username`` / ``profiles.<name>.password``
+   from ``~/.tv/config``. You **must** pass ``profile="<name>"`` to the tool —
+   no root-level ``username`` fallback is supported.
 2. **Environment variables** — ``TV_USERNAME`` and ``TV_PASSWORD``.
 3. **Manual mode** — navigates to the sign-in page and waits for you to type.
+
+Config file format:
+
+```json
+{
+  "profiles": {
+    "work": {
+      "username": "work@tradingview.com",
+      "password": "work_secret"
+    },
+    "personal": {
+      "username": "personal@example.com",
+      "password": "personal_secret"
+    }
+  }
+}
 
 ## TradingView JS API reference (CDP context)
 

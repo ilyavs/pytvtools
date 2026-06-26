@@ -32,18 +32,45 @@ server = Server("pytvtools")
 # Credential resolution
 # --------------------------------------------------------------------------
 
-def _resolve_credentials() -> dict[str, str] | None:
-    """Try config file, then env vars. Returns ``{username, password}`` or ``None``."""
-    config_path = os.environ.get("TV_CONFIG_PATH", str(Path.home() / ".tv" / "config"))
-    try:
-        with open(config_path) as f:
-            cfg = json.load(f)
-        u = cfg.get("username", "")
-        p = cfg.get("password", "")
-        if u and p:
-            return {"username": u, "password": p}
-    except (FileNotFoundError, json.JSONDecodeError):
-        pass
+def _resolve_credentials(profile: str | None = None) -> dict[str, str] | None:
+    """Resolve TradingView credentials for a named profile.
+
+    Only ``profiles.<name>`` in the config file is checked — there is no
+    root-level ``username`` / ``password`` fallback.  If you want env-var
+    or manual mode, omit the ``profile`` argument.
+
+    Resolution order:
+
+    1. **Named profile in config** — ``profiles.<name>.username`` /
+       ``profiles.<name>.password`` in ``~/.tv/config`` (or ``$TV_CONFIG_PATH``).
+       Only checked when ``profile`` is provided.
+    2. **Environment variables** — ``TV_USERNAME`` / ``TV_PASSWORD``.
+    3. **Manual mode** — return ``None``, caller opens sign-in page.
+
+    Parameters
+    ----------
+    profile : str or None
+        Named profile under the ``profiles`` key in the config file.
+        Must be explicitly provided to use config-file credentials.
+
+    Returns
+    -------
+    dict or None
+        ``{"username": …, "password": …}`` or ``None``.
+    """
+    if profile:
+        config_path = os.environ.get("TV_CONFIG_PATH", str(Path.home() / ".tv" / "config"))
+        try:
+            with open(config_path) as f:
+                cfg = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            cfg = None
+        if cfg:
+            p_cfg = (cfg.get("profiles") or {}).get(profile) or {}
+            u = p_cfg.get("username", "")
+            p = p_cfg.get("password", "")
+            if u and p:
+                return {"username": u, "password": p}
 
     u = os.environ.get("TV_USERNAME", "")
     p = os.environ.get("TV_PASSWORD", "")
@@ -51,6 +78,44 @@ def _resolve_credentials() -> dict[str, str] | None:
         return {"username": u, "password": p}
 
     return None
+
+
+async def _test_profile(tv, name: str, creds: dict[str, str]) -> dict:
+    """Try logging in with a single profile and report detailed results."""
+    import asyncio
+
+    # Navigate away from chart so login actually shows the form
+    await tv._eval("window.location.href = 'about:blank'")
+    await asyncio.sleep(0.5)
+
+    try:
+        result = await tv.login(
+            username=creds["username"],
+            password=creds["password"],
+            timeout=45,
+        )
+    except Exception as e:
+        return {"profile": name, "status": "error", "error": str(e)[:300]}
+
+    await asyncio.sleep(2)
+    url = await tv._eval("window.location.href")
+    page_text = await tv._eval("document.body.innerText.substring(0, 600)")
+    has_captcha = "captcha" in (page_text or "").lower()
+    has_2fa = any(t in (page_text or "").lower() for t in ["2fa", "two-factor", "two factor", "authenticator", "verification code"])
+
+    await tv._eval("window.location.href = 'https://www.tradingview.com/chart/'")
+    await asyncio.sleep(3)
+    still_logged_in = await tv.is_logged_in()
+
+    return {
+        "profile": name,
+        "login_result": result,
+        "url_after": (url or "")[:120],
+        "page_clues": (page_text or "")[:300],
+        "captcha_detected": has_captcha,
+        "2fa_detected": has_2fa,
+        "logged_in_after": still_logged_in,
+    }
 
 
 @server.list_tools()
@@ -336,13 +401,19 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="login",
-            description="Log in to TradingView. Uses credentials_command from ~/.tv/config, or TV_USERNAME/TV_PASSWORD env vars, or falls back to manual mode (opens sign-in page for you to type).",
+            description="Log in to TradingView. Resolves credentials from ~/.tv/config (profiles.<name>), TV_USERNAME/TV_PASSWORD env vars, or falls back to manual mode.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "timeout": {"type": "number", "description": "Max seconds to wait (default 120)"},
+                    "profile": {"type": "string", "description": "Named profile under `profiles` key in ~/.tv/config"},
                 },
             },
+        ),
+        Tool(
+            name="test_profiles",
+            description="Try every profile in ~/.tv/config and report results.",
+            inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="logout",
@@ -464,15 +535,37 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             elif name == "is_logged_in":
                 result = {"logged_in": await tv.is_logged_in()}
             elif name == "login":
-                creds = _resolve_credentials()
+                profile = arguments.get("profile")
+                creds = _resolve_credentials(profile=profile)
                 if creds:
                     result = await tv.login(
                         username=creds["username"],
                         password=creds["password"],
                         timeout=arguments.get("timeout", 120),
+                        force=bool(profile),
                     )
                 else:
                     result = await tv.login(timeout=arguments.get("timeout", 120))
+            elif name == "test_profiles":
+                import json as _json, os as _os
+                from pathlib import Path as _Path
+                config_path = _os.environ.get("TV_CONFIG_PATH", str(_Path.home() / ".tv" / "config"))
+                try:
+                    with open(config_path) as f:
+                        cfg = _json.load(f)
+                except Exception as e:
+                    result = {"error": f"Cannot read config: {e}"}
+                    cfg = None
+                if cfg:
+                    results = []
+                    for pname in sorted((cfg.get("profiles") or {}).keys()):
+                        creds = _resolve_credentials(profile=pname)
+                        if creds:
+                            r = await _test_profile(tv, pname, creds)
+                            results.append(r)
+                        else:
+                            results.append({"profile": pname, "status": "skipped", "reason": "No credentials resolved"})
+                    result = {"results": results}
             elif name == "logout":
                 result = await tv.logout()
             elif name == "dismiss_ad":
