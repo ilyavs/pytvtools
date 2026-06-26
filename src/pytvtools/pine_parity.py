@@ -80,6 +80,11 @@ _PINE_INDICATORS: dict[str, dict[str, Any]] = {
         "study_id": "PUB;85",
         "plot_index": 0,
     },
+    "pvp": {
+        "file": "pvp.pine",
+        "study_id": None,
+        "plot_index": 0,
+    },
 }
 
 
@@ -234,6 +239,198 @@ async def compare_pine_indicator(
         tv, symbol, timeframe, pine_name, study_id,
         max_bars=max_bars, tolerance=tolerance,
         plot_index=effective_plot,
+    )
+
+
+async def compare_pine_pvp(
+    tv: TV,
+    symbol: str = "BINANCE:BTCUSDT",
+    timeframe: str = "1H",
+    *,
+    period_mult: int = 1,
+    period_unit: str = "Day",
+    va_pct: int = 70,
+    num_rows: int = 24,
+    extend_poc: bool = True,
+    tolerance: float = 0.01,
+) -> PineParityReport:
+    """Compare built-in Periodic Volume Profile against custom Pine implementation.
+
+    The built-in PVP draws POC/VAH/VAL as ``line.new()`` objects at period
+    boundaries.  The custom Pine implementation uses ``plot()``.  This
+    function reads both, aligns by bar timestamp, and compares POC values.
+    """
+    pine_name = "pvp"
+
+    # Step 1: Set up chart, force full history
+    await tv.set_symbol(symbol)
+    await tv.set_timeframe(timeframe)
+    await tv.wait_for_chart_ready(timeout=10)
+
+    await tv._eval("""
+    (function() {
+        var model = TradingViewApi.chart().chartWidget().model();
+        var ts = model.timeScale();
+        ts.scrollToFirstBar();
+        ts.zoom(-1000);
+        return true;
+    })()
+    """)
+    await asyncio.sleep(2)
+    await tv.remove_all_indicators()
+
+    # Step 2: Add built-in PVP
+    eid_builtin = await tv.add_indicator("Periodic Volume Profile")
+    if eid_builtin is None:
+        results = await tv.search_indicators("Periodic Volume")
+        if results:
+            eid_builtin = await tv.add_indicator(results[0].get("study_id", results[0]["id"]))
+    if eid_builtin is None:
+        raise RuntimeError("Failed to add built-in Periodic Volume Profile indicator")
+
+    for _ in range(15):
+        await asyncio.sleep(0.5)
+        lines = await tv.get_pine_lines()
+        if any("POC" in l.get("text", "") for l in lines):
+            break
+
+    # Step 3: Read built-in PVP data — try data source first, fall back to lines
+    js = """
+    (function() {
+        try {
+            var model = TradingViewApi.chart().chartWidget().model();
+            var ds = model.dataSourceForId(__EID__);
+            if (!ds) return {type: "no_source"};
+            var items = ds._data && ds._data._items;
+            if (!items || !items.length) return {type: "no_items"};
+            var result = [];
+            for (var i = 0; i < items.length; i++) {
+                var v = items[i].value;
+                if (v && v.length >= 2) {
+                    result.push({timestamp: v[0], values: v.slice(1)});
+                }
+            }
+            return {type: "ok", count: items.length, plotCount: ds._simplePlotsCount, values: result};
+        } catch(e) {
+            return {type: "error", message: e.message};
+        }
+    })()
+    """.replace("__EID__", repr(eid_builtin))
+
+    raw_data = await tv._eval(js)
+
+    builtin_poc: dict[int, float] = {}
+    builtin_vah: dict[int, float] = {}
+    builtin_val: dict[int, float] = {}
+
+    if isinstance(raw_data, dict) and raw_data.get("type") == "ok":
+        for entry in raw_data.get("values", []):
+            ts = int(entry["timestamp"])
+            vals = entry.get("values", [])
+            if len(vals) >= 1 and vals[0] is not None:
+                builtin_poc[ts] = float(vals[0])
+            if len(vals) >= 2 and vals[1] is not None:
+                builtin_vah[ts] = float(vals[1])
+            if len(vals) >= 3 and vals[2] is not None:
+                builtin_val[ts] = float(vals[2])
+
+    if not builtin_poc:
+        # Fallback: read lines with enhanced point info
+        lines_js = """
+        (function() {
+            var c = TradingViewApi.chart();
+            var lines = c.chartWidget().activeChart().getAllLines() || [];
+            var result = [];
+            lines.forEach(function(l) {
+                var t = null;
+                try { if (l.time) t = l.time; } catch(e) {}
+                if (t === null) {
+                    try { if (l.get_point && l.get_point(0)) t = l.get_point(0).time; } catch(e) {}
+                }
+                result.push({id: l.id, price: l.price, time: t, text: l.text || ''});
+            });
+            return result;
+        })()
+        """
+        enhanced_lines = await tv._eval(lines_js) or []
+        for line in enhanced_lines:
+            text = line.get("text", "")
+            ts = line.get("time")
+            price = line.get("price")
+            if ts is None or price is None:
+                continue
+            ts = int(ts)
+            if "POC" in text:
+                builtin_poc[ts] = price
+            if "VAH" in text:
+                builtin_vah[ts] = price
+            if "VAL" in text:
+                builtin_val[ts] = price
+
+    await tv.remove_indicator(eid_builtin)
+
+    # Step 4: Add custom PVP via Pine Editor
+    source = get_pine_indicator_source(pine_name)
+    custom_eid = await _pine_add_script(tv, source)
+
+    # Step 5: Read custom PVP plot data
+    custom_data = None
+    for _ in range(15):
+        custom_data = await tv.get_indicator_data(custom_eid)
+        if custom_data and custom_data.get("plots") and custom_data["count"] > 0:
+            break
+        await asyncio.sleep(0.5)
+    else:
+        custom_data = await tv.get_indicator_data(custom_eid)
+
+    if custom_data is None:
+        raise RuntimeError(f"No data returned for custom PVP indicator {custom_eid}")
+
+    custom_plots = custom_data.get("plots", [])
+
+    custom_poc: dict[int, float] = {}
+    custom_vah: dict[int, float] = {}
+    custom_val: dict[int, float] = {}
+
+    if len(custom_plots) >= 1:
+        for entry in custom_plots[0]["values"]:
+            if entry.get("value") is not None:
+                custom_poc[int(entry["timestamp"])] = entry["value"]
+    if len(custom_plots) >= 2:
+        for entry in custom_plots[1]["values"]:
+            if entry.get("value") is not None:
+                custom_vah[int(entry["timestamp"])] = entry["value"]
+    if len(custom_plots) >= 3:
+        for entry in custom_plots[2]["values"]:
+            if entry.get("value") is not None:
+                custom_val[int(entry["timestamp"])] = entry["value"]
+
+    await tv.remove_indicator(custom_eid)
+
+    # Step 6: Compare POC values
+    all_tss = sorted(set(builtin_poc) & set(custom_poc))
+
+    mismatches: list[PineMismatch] = []
+    matched = 0
+
+    for ts in all_tss:
+        bv = builtin_poc[ts]
+        cv = custom_poc[ts]
+        delta = abs(bv - cv)
+        if delta > tolerance:
+            mismatches.append(PineMismatch(ts, bv, cv, delta))
+        else:
+            matched += 1
+
+    return PineParityReport(
+        symbol=symbol,
+        timeframe=timeframe,
+        pine_name=pine_name,
+        total_bars=len(all_tss),
+        matched=matched,
+        mismatches=mismatches,
+        tolerance=tolerance,
+        source="pine_editor",
     )
 
 
