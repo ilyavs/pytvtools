@@ -1,0 +1,166 @@
+//@version=6
+indicator(title="Custom PVP", shorttitle="PVP_Custom", overlay=true, format=format.price, precision=2)
+
+// -- Inputs --
+period_mult = input.int(1, "Period", minval=1, group="Volume Profile")
+period_unit = input.string("Day", "Period Unit", options=["Day", "Week", "Month"], group="Volume Profile")
+volume_mode = input.string("Total", "Volume", options=["Total", "Up/Down", "Delta"], group="Volume Profile")
+va_pct      = input.int(70, "Value Area Volume", minval=50, maxval=99, group="Rows")
+num_rows    = input.int(24, "Number of Rows", minval=5, maxval=100, group="Rows")
+extend_poc  = input.bool(true, "Extend POC Right", group="Display")
+
+// -- LTF resolution --
+f_get_ltf() =>
+    if timeframe.isdaily
+        "5"
+    else if timeframe.isweekly
+        "30"
+    else if timeframe.ismonthly
+        "120"
+    else
+        int secs = timeframe.in_seconds()
+        if secs <= 10
+            "1S"
+        else if secs <= 15
+            "5S"
+        else if secs <= 30
+            "15S"
+        else if secs <= 900
+            "1"
+        else if secs <= 1800
+            "5"
+        else if secs <= 3600
+            "10"
+        else if secs <= 7200
+            "15"
+        else if secs <= 14400
+            "30"
+        else
+            "60"
+
+// -- Period timeframe --
+f_get_period_tf(string unit, int mult) =>
+    if unit == "Day"
+        str.tostring(mult) + "D"
+    else if unit == "Week"
+        str.tostring(mult) + "W"
+    else
+        str.tostring(mult) + "M"
+
+// -- Row data --
+var row_high     = array.new<float>(0)
+var row_low      = array.new<float>(0)
+var row_volume   = array.new<float>(0)
+var row_buy_vol  = array.new<float>(0)
+var row_sell_vol = array.new<float>(0)
+
+// -- State --
+var float poc_price = na
+var float vah_price = na
+var float val_price = na
+var line  poc_line  = na
+
+// -- Reset rows for new period --
+f_reset_rows(hist_high, hist_low, n) =>
+    float row_height = math.round_to_mintick((hist_high - hist_low) / n)
+    array.clear(row_high)
+    array.clear(row_low)
+    array.clear(row_volume)
+    array.clear(row_buy_vol)
+    array.clear(row_sell_vol)
+    for i = 0 to n - 1
+        array.push(row_high, hist_low + (i + 1) * row_height)
+        array.push(row_low, hist_low + i * row_height)
+        array.push(row_volume, 0.0)
+        array.push(row_buy_vol, 0.0)
+        array.push(row_sell_vol, 0.0)
+
+// -- Distribute LTF volume into rows --
+f_distribute_volume(ltf_h, ltf_l, ltf_c, ltf_o, ltf_v, n) =>
+    int size = array.size(ltf_h)
+    for i = 0 to size - 1
+        float h = array.get(ltf_h, i)
+        float l = array.get(ltf_l, i)
+        float c = array.get(ltf_c, i)
+        float o = array.get(ltf_o, i)
+        float v = array.get(ltf_v, i)
+        float bar_range = h - l
+        if bar_range > 0
+            for j = 0 to n - 1
+                float rh = array.get(row_high, j)
+                float rl = array.get(row_low, j)
+                float overlap = math.max(0.0, math.min(rh, h) - math.max(rl, l))
+                if overlap > 0
+                    float vol_share = v * overlap / bar_range
+                    array.set(row_volume, j, array.get(row_volume, j) + vol_share)
+                    if c > o
+                        array.set(row_buy_vol, j, array.get(row_buy_vol, j) + vol_share)
+                    else
+                        array.set(row_sell_vol, j, array.get(row_sell_vol, j) + vol_share)
+
+// -- Find POC (row with max volume) --
+f_calc_poc(n) =>
+    float max_vol = array.get(row_volume, 0)
+    int poc_idx = 0
+    for i = 1 to n - 1
+        float vol = array.get(row_volume, i)
+        if vol > max_vol
+            max_vol := vol
+            poc_idx := i
+    float poc = (array.get(row_high, poc_idx) + array.get(row_low, poc_idx)) / 2.0
+    [poc, poc_idx]
+
+// -- Calculate VAH and VAL --
+f_calc_vah_val(poc_idx, va_pct, n) =>
+    float total_vol = array.sum(row_volume)
+    if total_vol <= 0
+        [na, na]
+    else
+        float target = total_vol * va_pct / 100.0
+        float accumulated = array.get(row_volume, poc_idx)
+        int left = poc_idx - 1
+        int right = poc_idx + 1
+        while accumulated < target and (left >= 0 or right < n)
+            float left_vol  = left >= 0 ? array.get(row_volume, left) : -1.0
+            float right_vol = right < n ? array.get(row_volume, right) : -1.0
+            if left_vol >= right_vol
+                accumulated := accumulated + left_vol
+                left := left - 1
+            else
+                accumulated := accumulated + right_vol
+                right := right + 1
+        float vah = right - 1 >= 0 and right - 1 < n ? array.get(row_high, right - 1) : array.get(row_high, n - 1)
+        float val = left + 1 >= 0 and left + 1 < n ? array.get(row_low, left + 1) : array.get(row_low, 0)
+        [vah, val]
+
+// -- Main --
+period_tf = f_get_period_tf(period_unit, period_mult)
+is_new_period = change(time(period_tf)) or bar_index == 0
+
+if is_new_period
+    if bar_index > 0 and array.size(row_volume) > 0
+        [pocCalc, pocIdx] = f_calc_poc(num_rows)
+        poc_price := pocCalc
+        [vahCalc, valCalc] = f_calc_vah_val(pocIdx, va_pct, num_rows)
+        vah_price := vahCalc
+        val_price := valCalc
+    hist_high = ta.highest(high, 200)
+    hist_low = ta.lowest(low, 200)
+    f_reset_rows(hist_high, hist_low, num_rows)
+
+ltf = f_get_ltf()
+[ltf_h, ltf_l, ltf_c, ltf_o, ltf_v] = request.security_lower_tf(syminfo.tickerid, ltf, [high, low, close, open, volume])
+
+if not na(ltf_h)
+    f_distribute_volume(ltf_h, ltf_l, ltf_c, ltf_o, ltf_v, num_rows)
+
+plot(poc_price, "POC", color.purple, linewidth=2)
+plot(vah_price, "VAH", color.blue, linewidth=1)
+plot(val_price, "VAL", color.blue, linewidth=1)
+
+if extend_poc and not na(poc_price)
+    if na(poc_line) or change(poc_price)
+        poc_line := line.new(bar_index, poc_price, bar_index + 1, poc_price, color.purple, width=2, extend=extend.right)
+    if not na(poc_line) and high >= poc_price and low <= poc_price
+        line.delete(poc_line)
+        poc_line := na
