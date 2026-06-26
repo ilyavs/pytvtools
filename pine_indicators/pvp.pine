@@ -11,32 +11,35 @@ extend_poc  = input.bool(true, "Extend POC Right", group="Display")
 
 // -- LTF resolution --
 f_get_ltf() =>
-    if timeframe.isdaily
-        "5"
-    else if timeframe.isweekly
-        "30"
-    else if timeframe.ismonthly
-        "120"
-    else
-        int secs = timeframe.in_seconds()
-        if secs <= 10
+    if timeframe.isseconds
+        if timeframe.multiplier <= 10
             "1S"
-        else if secs <= 15
+        else if timeframe.multiplier <= 15
             "5S"
-        else if secs <= 30
+        else
             "15S"
-        else if secs <= 900
+    else if timeframe.isintraday
+        int n = timeframe.multiplier
+        if n <= 4
             "1"
-        else if secs <= 1800
+        else if n <= 15
+            "1"
+        else if n <= 30
             "5"
-        else if secs <= 3600
+        else if n <= 60
             "10"
-        else if secs <= 7200
+        else if n <= 120
             "15"
-        else if secs <= 14400
+        else if n <= 240
             "30"
         else
             "60"
+    else if timeframe.isdaily
+        "5"
+    else if timeframe.isweekly
+        "30"
+    else
+        "120"
 
 // -- Period timeframe --
 f_get_period_tf(string unit, int mult) =>
@@ -159,7 +162,8 @@ plot(vah_price, "VAH", color.blue, linewidth=1)
 plot(val_price, "VAL", color.blue, linewidth=1)
 
 if extend_poc and not na(poc_price)
-    if na(poc_line) or change(poc_price)
+    if change(poc_price)
+        line.delete(poc_line)
         poc_line := line.new(bar_index, poc_price, bar_index + 1, poc_price, color.purple, width=2, extend=extend.right)
     if not na(poc_line) and high >= poc_price and low <= poc_price
         line.delete(poc_line)
