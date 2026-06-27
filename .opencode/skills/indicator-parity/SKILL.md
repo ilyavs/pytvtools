@@ -141,7 +141,37 @@ Also update the import at the top of `indicator_parity.py`:
 from pytvtools_core.indicators import rsi, sma, ema, macd, mfi, bbands, atr, srsi, my_indicator
 ```
 
-### 6. Register in `src/pytvtools/pine_parity.py`
+### 6. Verify reference values are fetchable from CDP
+
+**Before writing any comparison code, confirm you can read the built-in indicator's values correctly.** Not all indicators expose their computed values through the standard path (`ds._data._items`). Some use custom renderers that store data differently.
+
+1. **Probe the built-in's data source** — add it to the chart, read `_data._items`, and print sample values:
+   ```python
+   eid = await tv.add_indicator("Periodic Volume Profile")
+   js = """(function() {
+       var ds = TradingViewApi.chart().chartWidget().model().dataSourceForId(__EID__);
+       if (!ds || !ds._data || !ds._data._items) return "no items";
+       var items = ds._data._items;
+       var out = [];
+       for (var i = 0; i < Math.min(5, items.length); i++) {
+           out.push({index: items[i].index, value: items[i].value});
+       }
+       return JSON.stringify({count: items.length, sample: out});
+   })()""".replace("__EID__", repr(eid))
+   print(await tv._eval(js))
+   ```
+
+2. **Verify values match the chart** — cross-reference a known bar's close/price against what the indicator returns. If `_data._items` values don't look like expected output (e.g., they're OHLC-like prices, not indicator values), the indicator stores its data elsewhere.
+
+3. **For indicators with custom renderers (Volume Profile, etc.):** the computed values may be in `_paneViews[N]._data` as pixel coordinates. Convert via `mainSeries.priceScale().coordinateToPrice(y)`. See `tv.py:get_volume_profile()` for a working example.
+
+4. **For Pine Script indicators with only `line.new`/`label.new`/`box.new`:** those execute in a web worker — `line.new` values are NOT accessible from main-thread JS. The `get_pine_lines()` / `get_pine_labels()` methods may return empty. **Solution:** add `plot(value, "name", display=display.none)` to the Pine script so values appear in `_data._items`, then read via `get_indicator_data(entity_id)`.
+
+5. **Document the access path** — once you've confirmed how to read values, note it. Future agents shouldn't rediscover this.
+
+If the access path turns out to be non-trivial (pixel coords, web-worker isolation, custom renderers), add a `get_<indicator>_values()` method to the TV class before proceeding with comparison.
+
+### 7. Register in `src/pytvtools/pine_parity.py`
 
 ```python
 _PINE_INDICATORS: dict[str, dict[str, Any]] = {
@@ -156,7 +186,7 @@ _PINE_INDICATORS: dict[str, dict[str, Any]] = {
 
 The `name` key in `_PINE_INDICATORS` becomes the `pine_name` argument to `compare_pine_indicator()`.
 
-### 7. Test parity
+### 8. Test parity
 
 ```python
 from pytvtools import TV
@@ -192,7 +222,7 @@ If mismatches exist they are *always* a real bug in the Python implementation. I
 3. Checking input mapping against `getInputValues()` raw IDs
 4. For recursive indicators, ensure the chart loaded full history (`scrollToFirstBar + zoom(-1000)` + 3s sleep)
 
-### 8. Run unit tests
+### 9. Run unit tests
 
 ```bash
 docker exec -w /app docker-pytvtools-1 python -m pytest tests/ -m "not integration" -v 2>&1 | tail -20
@@ -200,7 +230,7 @@ docker exec -w /app docker-pytvtools-1 python -m pytest tests/ -m "not integrati
 
 All indicator tests (`test_indicators.py`, `test_indicator_parity.py`, `test_pine_parity.py`) must pass clean.
 
-### 9. Cleanup
+### 10. Cleanup
 
 Before committing, clean up the working tree:
 
@@ -218,7 +248,7 @@ Before committing, clean up the working tree:
 
 5. **Verify all tests pass** one final time after any cleanup edits.
 
-### 10. Commit and push
+### 11. Commit and push
 
 ```bash
 git add -A && git commit -m "feat: add <indicator name> parity (Python + Pine, 100% match)"
@@ -230,6 +260,10 @@ git push
 - **`pine_set_source` returns `{"ok":true}` even when editor is closed.** Always verify the editor panel is open before setting source — otherwise compile silently does nothing.
 - **Shorttitle > 10 chars generates a warning** (severity 4). Harmless but noisy; keep shorttitle ≤ 10 chars.
 - **`compare_indicator()` does not remove the indicator.** The study stays on the chart after comparison. Always call `remove_all_indicators()` between checks (2-indicator hard limit).
+- **Runtime errors survive compile.** A Pine script can compile successfully (`pine_compile` returns `{"ok": true}`) but have a runtime error ("Runtime error: ...") that only appears in the DOM. The `check_pine_runtime_errors()` method in `tv.py` scans for these — it's integrated into `pine_compile()` return value. Always check `result.get("runtime_errors")`.
+- **`_createStudy` Promise may never resolve** in Docker/headless Chrome TV web builds. Use fire-and-forget (call without `await`), then poll `getAllStudies()` to find the new entity by name. The standard `add_indicator()` flow in `tv.py` handles this.
+- **`_data._items` population depends on environment.** In Docker Chrome TV web builds, custom Pine Script studies always have `_data._items.length === 0`. Built-in studies may or may not populate it. Desktop TradingView generally works fully. Don't assume empty data = bug — check environment first.
+- **Visual-only parity fallback.** For indicators whose programmatic values can't be read (no `_data._items`, no `get_indicator_data()`), implement a `compare_pine_<name>()` function that computes a Python reference, adds the custom Pine script, and reports "verification-only" if data is unavailable. Screenshot comparison is the ultimate fallback in headless environments.
 - **Each `TV()` instance has independent auth.** Interactive scripts that create their own `async with TV()` won't share login state with the MCP server.
 - **SRSI input IDs are counterintuitive.** `in_0=smooth_k, in_1=smooth_d, in_2=period` — not period first. Always read raw input IDs via `getInputValues()`.
 - **BB stddev is `in_3`, not `in_2`.** `in_2` is MA Type, `in_3` is StdDev, `in_4` is Median.

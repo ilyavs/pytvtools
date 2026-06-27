@@ -104,3 +104,35 @@ The core package is standalone — can be synced to a public repo via `python sc
 4. Read `tv.py` to understand existing patterns before adding new methods
 5. Run unit tests to confirm baseline
 6. Implement, test, verify all tests still pass
+
+## Periodic Volume Profile Parity
+
+The custom Pine implementation at `pine_indicators/pvp.pine` achieves **100% match
+on completed period POCs** against TradingView's built-in Periodic Volume Profile
+(Total volume mode, 24 rows, 1D period on 60m chart).
+
+Key findings:
+
+| Aspect | Detail |
+|--------|--------|
+| **Completed POC match** | 25/25 period-end bars match at ±0.01 tolerance |
+| **Developing POC gap** | ~12% mismatch — mid-period values differ due to data pipeline timing, not algorithm |
+| **Lower TF requirement** | `request.security_lower_tf(syminfo.tickerid, "10", [high, low, volume])` — matches TV's built-in behavior for 60m charts |
+| **Pine v6 workaround** | `array.concat()` instead of `for`-loop + `array.push()` — `push()` silently fails with `security_lower_tf` arrays |
+| **POC formula** | `pls_min + (poc_row + 0.5) * tick_size` — center of the highest-volume row |
+| **Volume distribution** | `vol_per_tick = volume / num_ticks` — equal volume per tick, matching built-in |
+
+### Running parity comparison
+
+```python
+from pytvtools import TV, wait_for_cdp
+from pytvtools.indicator_parity import compare_pvp
+
+async with TV() as tv:
+    result = await compare_pvp(tv, "BATS:INTC", "60")
+    print(f"Match: {result['matched']}/{result['total']} ({result['match_rate']:.1f}%)")
+```
+
+The function adds both the built-in PVP and the custom Pine version, waits for
+data, and compares only on timestamps where both have values (completed-period
+POC bars at 19:00 ET).

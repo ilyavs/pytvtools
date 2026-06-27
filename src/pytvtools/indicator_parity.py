@@ -183,6 +183,7 @@ async def compare_indicator(
     max_bars: int | None = None,
     tolerance: float = 0.01,
     plot_index: int = 0,
+    load_all_bars: bool = True,
 ) -> ParityReport:
     """Compare a TradingView indicator against its Python equivalent.
 
@@ -205,6 +206,10 @@ async def compare_indicator(
         Maximum allowed absolute difference between Python and TV values.
     plot_index : int
         Which plot to compare (0 = first/main plot).
+    load_all_bars : bool
+        If ``True``, scroll the chart to the first bar to force loading all
+        historical data (needed for recursive indicators like EMA, RSI).
+        Set ``False`` for indicators that only need recent bars (e.g. PVP).
     """
     await tv.set_symbol(symbol)
     await tv.set_timeframe(timeframe)
@@ -242,8 +247,10 @@ async def compare_indicator(
     # Force the chart to load all available historical bars by scrolling
     # to the first bar and zooming out.  This ensures Python's computation
     # uses the same bar range as TV (essential for recursive indicators
-    # like EMA, Wilder's RSI, MACD).
-    await tv._eval("""
+    # like EMA, Wilder's RSI, MACD).  Set load_all_bars=False for indicators
+    # that only need recent bars (e.g. PVP).
+    if load_all_bars:
+        await tv._eval("""
 (function() {
     var model = TradingViewApi.chart().chartWidget().model();
     var ts = model.timeScale();
@@ -252,7 +259,7 @@ async def compare_indicator(
     return true;
 })()
 """)
-    await asyncio.sleep(2)
+        await asyncio.sleep(2)
 
     for _ in range(15):
         tv_data = await tv.get_indicator_data(entity_id)
@@ -329,3 +336,120 @@ async def compare_indicator(
         mismatches=mismatches,
         tolerance=tolerance,
     )
+
+
+async def compare_pvp(
+    tv: TV,
+    symbol: str,
+    timeframe: str = "60",
+    *,
+    tolerance: float = 0.01,
+) -> dict:
+    """Compare custom Pine PVP against built-in Periodic Volume Profile.
+
+    Adds both indicators, reads Plot 0 values from each, and compares on
+    timestamps where both have data (completed-period POC bars).
+
+    Parameters
+    ----------
+    tv : TV
+        Connected TV instance.
+    symbol : str
+        Symbol to use (e.g. ``"BATS:INTC"``).
+    timeframe : str
+        Chart timeframe (e.g. ``"60"`` for 60m — the PVP uses 10m lower-TF
+        internally via ``request.security_lower_tf``).
+    tolerance : float
+        Max absolute price difference for a match (default 0.01).
+
+    Returns
+    -------
+    dict with keys: symbol, timeframe, matched, total, match_rate, mismatches
+    """
+    from pytvtools.pine_parity import get_pine_indicator_source
+
+    await tv.set_symbol(symbol)
+    await tv.set_timeframe(timeframe)
+    await tv.wait_for_chart_ready(timeout=10)
+    await tv.remove_all_indicators()
+    await asyncio.sleep(1)
+
+    # Add built-in Periodic Volume Profile
+    eid_builtin = await tv.add_indicator(
+        "Periodic Volume Profile", inputs={"volume": "Total"}
+    )
+    if eid_builtin is None:
+        raise RuntimeError("Failed to add built-in Periodic Volume Profile")
+
+    # Wait for built-in data
+    builtin_data = None
+    for _ in range(20):
+        builtin_data = await tv.get_indicator_data(eid_builtin)
+        if builtin_data and builtin_data.get("plots") and builtin_data["count"] > 0:
+            break
+        await asyncio.sleep(0.5)
+
+    if builtin_data is None:
+        raise RuntimeError("No data returned for built-in PVP")
+
+    builtin_by_ts: dict[int, float] = {}
+    for entry in builtin_data["plots"][0]["values"]:
+        val = entry.get("value")
+        if val is not None:
+            builtin_by_ts[int(entry["timestamp"])] = val
+
+    # Add custom Pine PVP
+    source = get_pine_indicator_source("pvp")
+    custom_eid = await tv.add_pine_script(source)
+    await asyncio.sleep(2)
+
+    # Wait for custom data
+    custom_data = None
+    for _ in range(20):
+        custom_data = await tv.get_indicator_data(custom_eid)
+        if custom_data and custom_data.get("plots") and custom_data["count"] > 0:
+            break
+        await asyncio.sleep(0.5)
+
+    if custom_data is None:
+        raise RuntimeError("No data returned for custom PVP")
+
+    custom_by_ts: dict[int, float] = {}
+    for entry in custom_data["plots"][0]["values"]:
+        val = entry.get("value")
+        if val is not None:
+            custom_by_ts[int(entry["timestamp"])] = val
+
+    # Compare on common timestamps (period-end bars)
+    common = sorted(set(builtin_by_ts) & set(custom_by_ts))
+    matched = 0
+    total = 0
+    mismatches: list[dict] = []
+
+    for ts in common:
+        b = builtin_by_ts[ts]
+        c = custom_by_ts[ts]
+        if b is None or c is None:
+            continue
+        total += 1
+        delta = abs(b - c)
+        if delta <= tolerance:
+            matched += 1
+        else:
+            mismatches.append({
+                "timestamp": ts,
+                "builtin": b,
+                "custom": c,
+                "delta": delta,
+            })
+
+    match_rate = (matched / total * 100) if total > 0 else 0.0
+
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "matched": matched,
+        "total": total,
+        "match_rate": match_rate,
+        "mismatches": mismatches,
+    }

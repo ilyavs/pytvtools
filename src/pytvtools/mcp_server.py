@@ -170,6 +170,24 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="get_ohlcv_multi",
+            description="Multi-symbol OHLCV via direct WebSocket (no Chrome). Fetches multiple symbols in parallel.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "symbols": {
+                        "type": "array", "items": {"type": "string"},
+                        "description": "Symbols in EXCHANGE:SYMBOL format, e.g. [\"NASDAQ:AAPL\", \"BINANCE:BTCUSDT\"]",
+                    },
+                    "interval": {"type": "string", "default": "1D", "description": "Timeframe (1, 5, 15, 60, D, W, M)"},
+                    "bars_count": {"type": "number", "default": 100, "description": "Number of bars per symbol"},
+                    "summary": {"type": "boolean", "default": False},
+                    "max_concurrent": {"type": "number", "default": 5, "description": "Max parallel connections"},
+                },
+                "required": ["symbols"],
+            },
+        ),
+        Tool(
             name="get_study_values",
             description="Current values from all visible indicators",
             inputSchema={"type": "object", "properties": {}},
@@ -244,6 +262,24 @@ async def list_tools() -> list[Tool]:
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
+            name="pine_check_runtime_errors",
+            description="Check for Pine Script runtime errors on the chart (without recompiling)",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="pine_check_runtime_errors_detailed",
+            description="Read runtime errors from indicator data sources with full error text, code, and stack trace. Clicks the exclamation icon to show the popup, reads the text, and dismisses it.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "indicator_name": {
+                        "type": "string",
+                        "description": "Optional indicator name filter (e.g. PVP_Custom). Returns all if omitted.",
+                    },
+                },
+            },
+        ),
+        Tool(
             name="pine_get_errors",
             description="Read Pine Script compilation errors from Monaco markers",
             inputSchema={"type": "object", "properties": {}},
@@ -252,6 +288,18 @@ async def list_tools() -> list[Tool]:
             name="pine_get_editor_source",
             description="Read the current Pine Script source from the editor",
             inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="pine_get_source",
+            description="Fetch the Pine Script source code of any public indicator (study_id or entity_id)",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "study_id": {"type": "string", "description": "Study ID like PUB;85 or STD;RSI"},
+                    "entity_id": {"type": "string", "description": "Optional entity ID from the chart"},
+                },
+                "required": ["study_id"],
+            },
         ),
         Tool(
             name="pine_close_editor",
@@ -449,6 +497,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                         bars_count=arguments.get("bars_count", 100),
                         summary=arguments.get("summary", False),
                     )
+            elif name == "get_ohlcv_multi":
+                async with TVData() as d:
+                    result = await d.get_ohlcv_multi(
+                        symbols=arguments["symbols"],
+                        interval=arguments.get("interval", "1D"),
+                        bars_count=arguments.get("bars_count", 100),
+                        summary=arguments.get("summary", False),
+                        max_concurrent=arguments.get("max_concurrent", 5),
+                    )
             elif name == "get_ohlcv":
                 result = await tv.get_ohlcv(
                     count=arguments.get("count", 100),
@@ -480,10 +537,21 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 result = {"ok": True}
             elif name == "pine_compile":
                 result = await tv.pine_compile()
+            elif name == "pine_check_runtime_errors":
+                result = {"runtime_errors": await tv.check_pine_runtime_errors()}
+            elif name == "pine_check_runtime_errors_detailed":
+                result = await tv.check_pine_runtime_errors_detailed(
+                    indicator_name=arguments.get("indicator_name"),
+                )
             elif name == "pine_get_errors":
                 result = {"errors": await tv.pine_get_errors()}
             elif name == "pine_get_editor_source":
                 result = {"source": await tv.pine_get_editor_source()}
+            elif name == "pine_get_source":
+                result = {"source": await tv.get_pine_source(
+                    study_id=arguments["study_id"],
+                    entity_id=arguments.get("entity_id"),
+                )}
             elif name == "pine_close_editor":
                 result = {"closed": await tv.pine_close_editor()}
             elif name == "batch":

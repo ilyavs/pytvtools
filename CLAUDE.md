@@ -84,6 +84,7 @@ async with TVData() as d:
 - `get_quote()` → `{symbol: str}`
 - `wait_for_chart_ready(expected_symbol=None, timeout=10)` → `bool`
 - `get_study_values()` → `{name: {title, values: [{timestamp, value}]}}`
+- `get_volume_profile()` → `{periods: [{poc, vah, val}], count}` — POC/VAH/VAL from built-in Periodic Volume Profile (reads pixel coords from `_paneViews[4]._data`, converts via `coordinateToPrice()`)
 - `get_indicator_data(entity_id)` → all historical plot values per plot name
 - `search_indicators(query)` → `[{id, name, study_id}]`
 - `add_indicator(indicator, inputs=None)` → entity ID (e.g. `"STD;RSI"`, `"PUB;85"`)
@@ -305,6 +306,23 @@ mfi_vals = mfi(bars, period=14)
    report = await compare_indicator(tv, "BINANCE:BTCUSDT", "1D", "STD;<id>")
    ```
    Target >99% match at ±0.01 tolerance. The function waits up to 7.5s for indicator data after adding it.
+
+## Periodic Volume Profile (Pine implementation rules)
+
+The custom PVP at `pine_indicators/pvp.pine` matches built-in at 100% for
+completed-period POCs. Key rules when editing:
+
+- **Lower TF data**: `request.security_lower_tf("10")` for 10m bars inside 60m
+  chart bars.  The `"10"` string matches TV's built-in behavior.
+- **Pine v6 array limitation**: Never use `for`-loop + `array.push()` with
+  `security_lower_tf` arrays — `push()` silently fails.  Always use
+  `array.copy()` for initial assignment and `array.concat()` to append.
+- **Plots**: Plot 0 = developing POC (changes every bar), Plot 1 = period
+  boundary marker (1.0 at new-period start).  Completed POCs are in
+  `completed_poc_prices` array, drawn as lines.
+- **POC formula**: `pls_min + (poc_row + 0.5) * tick_size` — center-of-row
+- **Testing**: Use `compare_pvp(tv, symbol, timeframe)` from
+  `pytvtools.indicator_parity` to compare custom vs built-in.
 
 ## Indicator parity (Python vs TradingView)
 

@@ -31,6 +31,14 @@ class SymbolNotFoundError(RuntimeError):
     """Raised when the requested symbol is not found or fails to load."""
 
 
+class PineCompileError(RuntimeError):
+    """Raised when Pine Script compilation or runtime errors occur."""
+
+
+class PineEntityNotFoundError(RuntimeError):
+    """Raised when no entity ID is found after compiling a Pine script."""
+
+
 # ---------------------------------------------------------------------------
 # Known TV internal JS API paths (discovered via live probing)
 # ---------------------------------------------------------------------------
@@ -350,7 +358,18 @@ class TV:
             await asyncio.sleep(0.2)
         return False
 
-    async def scroll_to_date(self, date: str) -> None:
+    async def scroll_to_date(self, date: str, window_days: int = 2) -> None:
+        """Scroll the chart so *date* is centered in the visible range.
+
+        Parameters
+        ----------
+        date : str
+            ISO date (e.g. ``"2025-01-15"``).
+        window_days : int
+            Number of days to show around the target (default 2 = ±1 day).
+            Use a larger value (e.g. 200) to show thousands of bars.
+        """
+        half = window_days // 2 * 86400
         await self._eval(f"""
         (function() {{
             var chart = {_CHART_API};
@@ -368,7 +387,7 @@ class TV:
                 var model = w.model();
                 var sr = model.mainSeries();
                 if (sr && sr.setTimeScale) {{
-                    sr.setTimeScale({{from: ts - 86400, to: ts + 86400}});
+                    sr.setTimeScale({{from: ts - {half}, to: ts + {half}}});
                 }}
             }}
             return true;
@@ -460,6 +479,96 @@ class TV:
                 }}
             }});
             return result;
+        }})()
+        """)
+
+    async def get_volume_profile(self) -> dict[str, Any]:
+        """Read POC/VAH/VAL values from the built-in Periodic Volume Profile.
+
+        Returns one entry per visible period with POC (Point of Control),
+        VAH (Value Area High), and VAL (Value Area Low) prices.
+
+        Returns
+        -------
+        dict
+            ``None`` if the PVP is not found, otherwise::
+
+                {
+                    "periods": [
+                        {
+                            "poc": 128.98,
+                            "vah": 129.58,
+                            "val": 127.9
+                        },
+                        ...
+                    ],
+                    "count": 8
+                }
+
+        The PVP must be added to the chart first via
+        :meth:`add_indicator`.
+        """
+        return await self._eval(f"""
+        (function() {{
+            var model = {_CHART_API}.chartWidget().model();
+            var mainSeries = model.mainSeries();
+            var priceScale = mainSeries.priceScale();
+
+            var sources = model.dataSources();
+            var pvp = null;
+            for (var i = 0; i < sources.length; i++) {{
+                var s = sources[i];
+                if (!s.metaInfo) continue;
+                try {{
+                    if (s.metaInfo().description === 'Periodic Volume Profile') {{
+                        pvp = s; break;
+                    }}
+                }} catch(e) {{}}
+            }}
+            if (!pvp) return null;
+
+            var pvs = pvp._paneViews;
+            var lineData = null;
+            var lineKeys = null;
+            for (var pi = 0; pi < pvs.length; pi++) {{
+                var d = pvs[pi]._data;
+                if (!d) continue;
+                var ks = Object.keys(d).filter(function(k) {{ return !isNaN(parseInt(k)); }});
+                if (ks.length >= 3) {{ lineData = d; lineKeys = ks; break; }}
+            }}
+            if (!lineData || !lineKeys) return {{error: 'no line data', periods: [], count: 0}};
+
+            var rawLines = [];
+            for (var ki = 0; ki < lineKeys.length; ki++) {{
+                var k = lineKeys[ki];
+                var entry = lineData[k];
+                rawLines.push({{
+                    y: entry.y,
+                    left: Math.round(entry.left * 100) / 100,
+                    color: entry.color ? entry.color.slice(0, 30) : null
+                }});
+            }}
+
+            var groups = {{}};
+            for (var l of rawLines) {{
+                var lStr = String(l.left);
+                if (!groups[lStr]) groups[lStr] = [];
+                groups[lStr].push(l);
+            }}
+
+            var groupKeys = Object.keys(groups).sort(function(a,b) {{ return parseFloat(a) - parseFloat(b); }});
+            var periods = [];
+            for (var gk of groupKeys) {{
+                var members = groups[gk];
+                if (members.length !== 3) continue;
+                var ys = members.map(function(m) {{ return m.y; }}).sort(function(a,b) {{ return a - b; }});
+                periods.push({{
+                    poc: Math.round(priceScale.coordinateToPrice(ys[1]) * 100) / 100,
+                    vah: Math.round(priceScale.coordinateToPrice(ys[0]) * 100) / 100,
+                    val: Math.round(priceScale.coordinateToPrice(ys[2]) * 100) / 100,
+                }});
+            }}
+            return {{periods: periods, count: periods.length}};
         }})()
         """)
 
@@ -1321,7 +1430,88 @@ class TV:
             }});
         }})()
         """)
-        return {"errors": errors}
+        await asyncio.sleep(1)
+        runtime = await self.check_pine_runtime_errors()
+        return {"errors": errors, "runtime_errors": runtime}
+
+    async def add_pine_script(self, source: str) -> str:
+        """Inject Pine Script source via the editor, compile, and return entity ID.
+
+        Opens the Pine Editor, sets the source, compiles, and waits for
+        the study to appear on the chart.  Raises ``PineCompileError`` on
+        compilation errors or ``PineEntityNotFoundError`` if no entity
+        appears after compilation.
+        """
+        # Fetch existing study IDs before adding
+        studies_before = await self._get_study_ids()
+
+        # Open the Pine Editor dialog (only if not already open — the
+        # [data-name="pine-dialog-button"] is a toggle and would close it).
+        editor_open = await self._eval(
+            "!!document.querySelector('.monaco-editor.pine-editor-monaco')"
+        )
+        if not editor_open:
+            await self._eval("""
+            (function() {
+                var btn = document.querySelector('[data-name="pine-dialog-button"]');
+                if (!btn) {
+                    var btns = document.querySelectorAll('button');
+                    for (var i = 0; i < btns.length; i++) {
+                        var aria = (btns[i].getAttribute('aria-label') || '').toLowerCase();
+                        var dname = (btns[i].getAttribute('data-name') || '').toLowerCase();
+                        if (aria.indexOf('pine') >= 0 || dname.indexOf('pine') >= 0) {
+                            btn = btns[i];
+                            break;
+                        }
+                    }
+                }
+                if (btn) {
+                    btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+                }
+            })()
+            """)
+        import asyncio
+        await asyncio.sleep(2)
+
+        # Set the source code
+        await self.pine_set_source(source)
+
+        # Compile and collect errors
+        result = await self.pine_compile()
+        errors = result.get("errors", [])
+        real_errors = []
+        for e in errors:
+            if isinstance(e, dict) and e.get("severity", 0) >= 8:
+                real_errors.append(e)
+        if real_errors:
+            lines = "\n".join(
+                f"  Line {e.get('line','?')}, Col {e.get('column','?')}: {e.get('message','')}"
+                for e in real_errors
+            )
+            raise PineCompileError(f"Pine script compilation failed:\n{lines}")
+
+        # Check runtime errors from the data-source compile status
+        runtime = result.get("runtime_errors", [])
+        if runtime:
+            msgs = "; ".join(r.get("message", str(r)) for r in runtime)
+            raise PineCompileError(f"Pine script runtime error:\n{msgs}")
+
+        await asyncio.sleep(2)
+
+        # Find the new entity ID
+        studies_after = await self._get_study_ids()
+        new_ids = [s for s in studies_after if s not in studies_before]
+        entity_id = new_ids[0] if new_ids else (studies_before[-1] if studies_before else None)
+        if entity_id is None:
+            raise PineEntityNotFoundError(
+                "No study entity found after Pine compile"
+            )
+
+        # Close the Pine Editor
+        await self.pine_close_editor()
+        await asyncio.sleep(0.5)
+
+        return entity_id
 
     async def pine_get_errors(self) -> list[dict]:
         """Read Pine Script compilation errors from Monaco markers."""
@@ -1342,6 +1532,213 @@ class TV:
             }});
         }})()
         """)
+
+    async def check_pine_runtime_errors(self) -> list[dict]:
+        """Check for Pine Script runtime errors on the chart.
+
+        Scans the chart DOM for ``Runtime error`` text and checks each
+        study's compile-error status.  Returns a list of error objects
+        with ``{study_id?, study_name?, message, source}``.
+        """
+        dom_errors = await self._eval("""
+        (function() {
+            var results = [];
+            var divs = document.querySelectorAll('div');
+            for (var i = 0; i < divs.length; i++) {
+                var t = divs[i].textContent || '';
+                if (t.indexOf('Runtime error') >= 0) {
+                    var match = t.match(/Runtime error.*?(?:Close|$)/);
+                    if (match) {
+                        var msg = match[0].substring(0, 400);
+                        results.push({message: msg, source: 'dom'});
+                    }
+                    break;
+                }
+            }
+            return results;
+        })()
+        """)
+        study_errors = await self._eval("""
+        (function() {
+            var results = [];
+            var chart = window.TradingViewApi.chart();
+            var model = chart.chartWidget().model();
+            var studies = chart.getAllStudies();
+            studies.forEach(function(s) {
+                var ds = model.dataSourceForId(s.id);
+                if (!ds) return;
+                var ces = ds._compileErrorStatus;
+                if (ces && typeof ces === 'object') {
+                    var ownKeys = Object.keys(ces);
+                    var hasError = ownKeys.some(function(k) {
+                        return ['error', 'message', 'errorMessage', 'compilationError', 'runtimeError'].indexOf(k) >= 0;
+                    });
+                    if (hasError) {
+                        results.push({
+                            study_id: s.id,
+                            study_name: s.name,
+                            message: JSON.stringify(ces),
+                            source: 'compileErrorStatus'
+                        });
+                    }
+                }
+            });
+            return results;
+        })()
+        """)
+        return dom_errors + study_errors
+
+    async def check_pine_runtime_errors_detailed(
+        self, indicator_name: str | None = None
+    ) -> dict[str, Any]:
+        """Detect and read runtime errors for indicators on the chart.
+
+        Reads error status from each study's data source (``_status._value``)
+        and formats the full error message (code, description, stack trace).
+        If a ``dataProblemLow`` UI icon is found, clicks it to show the
+        popup, reads the popup text for verification, and dismisses it.
+
+        Parameters
+        ----------
+        indicator_name : str or None
+            If specified, only return errors whose indicator title
+            contains this string (case-insensitive).  ``None`` returns all.
+
+        Returns
+        -------
+        dict
+            ``{"errors": [...], "total": N}`` where each error has keys
+            ``indicator``, ``study_id``, and ``message``.  If the UI popup
+            was successfully read, ``popup_text`` is also included for the
+            first error.
+        """
+        import asyncio
+
+        raw_errors = await self._eval("""
+        (function() {
+            var chart = window.TradingViewApi.chart();
+            var model = chart.chartWidget().model();
+            var studies = chart.getAllStudies() || [];
+            var errors = [];
+
+            studies.forEach(function(s) {
+                var ds = model.dataSourceForId(s.id);
+                if (!ds || !ds._status) return;
+                var sv = ds._status._value;
+                if (!sv || sv.type !== 3) return;
+                var errDesc = sv.errorDescription;
+                if (!errDesc) return;
+
+                var ctx = errDesc.ctx || {};
+                var template = errDesc.error || '';
+                var formatted = template.replace(/\\{(\\w+)\\}/g, function(m, key) {
+                    return ctx[key] !== undefined ? String(ctx[key]) : m;
+                });
+
+                var indicatorName = ds.title
+                    ? ds.title().split(' (')[0] : (s.name || '');
+                var msg = (errDesc.title || 'Runtime error')
+                    + (ctx.code ? ': ' + ctx.code : '');
+                msg += '\\n' + formatted;
+
+                var stackLines = (errDesc.stack_trace || []).map(function(st) {
+                    return 'at ' + (st.n || '?') + '():' + (st.p || '?');
+                });
+                if (stackLines.length) {
+                    msg += '\\n' + stackLines.join('\\n');
+                }
+
+                errors.push({
+                    indicator: indicatorName,
+                    study_id: s.id,
+                    message: msg
+                });
+            });
+
+            return errors;
+        })()
+        """) or []
+
+        if indicator_name and raw_errors:
+            raw_errors = [
+                e for e in raw_errors
+                if indicator_name.lower() in e.get('indicator', '').lower()
+            ]
+
+        # UI popup read — click the exclamation icon and grab the text
+        if raw_errors:
+            try:
+                has_popup = await self._eval("""
+                (function() {
+                    var p = document.querySelector('.popupWidget-A4v0dl17');
+                    if (!p) return false;
+                    var r = p.getBoundingClientRect();
+                    return r.width > 0;
+                })()
+                """)
+            except Exception:
+                has_popup = False
+
+            if not has_popup:
+                await self._close_dialogs()
+                await asyncio.sleep(0.2)
+                try:
+                    await self._eval("""
+                    (function() {
+                        var icons = document.querySelectorAll(
+                            '[class*="dataProblemLow"]'
+                        );
+                        for (var i = 0; i < icons.length; i++) {
+                            var icon = icons[i];
+                            if (icon.closest('.popupWidget-A4v0dl17')) continue;
+                            var btn = icon.closest('button');
+                            if (btn) { btn.click(); return true; }
+                            icon.click();
+                            return true;
+                        }
+                        return false;
+                    })()
+                    """)
+                    await asyncio.sleep(0.5)
+                except Exception:
+                    pass
+
+            try:
+                popup_text = await self._eval("""
+                (function() {
+                    var p = document.querySelector('.popupWidget-A4v0dl17');
+                    if (!p) return null;
+                    var r = p.getBoundingClientRect();
+                    if (r.width <= 0) return null;
+                    return p.textContent.trim();
+                })()
+                """)
+                if popup_text:
+                    raw_errors[0]['popup_text'] = popup_text
+            except Exception:
+                pass
+
+            await asyncio.sleep(0.2)
+            try:
+                await self._eval("""
+                (function() {
+                    var icons = document.querySelectorAll(
+                        '[class*="dataProblemLow"]'
+                    );
+                    for (var i = 0; i < icons.length; i++) {
+                        var icon = icons[i];
+                        if (icon.closest('.popupWidget-A4v0dl17')) continue;
+                        var btn = icon.closest('button');
+                        if (btn) { btn.click(); return; }
+                        icon.click();
+                        return;
+                    }
+                })()
+                """)
+            except Exception:
+                pass
+
+        return {"errors": raw_errors, "total": len(raw_errors)}
 
     async def pine_get_editor_source(self) -> str | None:
         """Read the current Pine Script source from the editor."""
@@ -1604,11 +2001,31 @@ class TV:
         js = f"""
         (function() {{
             var c = {_CHART_API};
-            var lines = c.chartWidget().activeChart().getAllLines() || [];
+            var m = c.chartWidget().model();
+            var panes = m.panes();
             var result = [];
-            lines.forEach(function(l) {{
-                result.push({{id: l.id, price: l.price, text: l.text || ''}});
-            }});
+
+            function collect(src) {{
+                if (!src) return;
+                var g = src._graphics;
+                if (!g || !g._items) return;
+                for (var i = 0; i < g._items.length; i++) {{
+                    var item = g._items[i];
+                    if (!item || !item.value) continue;
+                    var v = item.value;
+                    var price = v.price !== undefined ? v.price : (v.y !== undefined ? v.y : null);
+                    if (price === null) continue;
+                    var text = v.text || v.label || '';
+                    result.push({{id: item.id || '', price: price, text: text}});
+                }}
+            }}
+
+            for (var p = 0; p < panes.length; p++) {{
+                var sources = panes[p].dataSources();
+                for (var s = 0; s < sources.length; s++) {{
+                    collect(sources[s]);
+                }}
+            }}
             return result;
         }})()
         """
