@@ -26,6 +26,7 @@ period_unit   = input.string("Day", "Period Unit", options=["Day", "Week", "Mont
 num_rows      = input.int(24, "Number of Rows", group="Rows", minval=1)
 
 LOWER_TF = "10"
+year_change = ta.change(time("12M"))
 
 f_period_tf() =>
     string base = switch period_unit
@@ -45,7 +46,7 @@ var int[]       completed_start_time = array.new<int>()
 var line[]      poc_lines            = array.new<line>()
 
 tf_change = ta.change(time(f_period_tf()))
-is_new_period = not na(period_start_bar) and tf_change != 0
+is_new_period = (not na(period_start_bar) and tf_change != 0) or (not na(period_start_bar) and year_change != 0)
 
 if is_new_period and not na(period_start_bar) and not na(period_highs) and array.size(period_highs) > 0
     // Compute POC for completed period
