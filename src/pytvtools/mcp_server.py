@@ -258,7 +258,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="pine_compile",
-            description="Compile Pine Script and return errors",
+            description="Compile Pine Script and return errors, button_clicked, study_added status, and runtime errors. Opens Pine Editor automatically if closed.",
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(

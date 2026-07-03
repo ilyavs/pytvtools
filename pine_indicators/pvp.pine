@@ -44,9 +44,25 @@ var float[]     period_volumes    = na
 var int         period_start_bar  = na
 var float       completed_poc     = na
 var line[]      poc_lines         = array.new<line>()
+var bool[]      poc_active        = array.new<bool>()
+var int[]       poc_period        = array.new<int>()
 
 tf_change = ta.change(time(f_period_tf()))
 is_new_period = (not na(period_start_bar) and tf_change != 0) or (not na(period_start_bar) and year_change != 0)
+
+if array.size(poc_lines) > 0
+    for j = 0 to array.size(poc_lines) - 1
+        if array.get(poc_active, j)
+            int ps = array.get(poc_period, j)
+            if bar_index > ps
+                line l = array.get(poc_lines, j)
+                float poc_price = line.get_price(l, bar_index)
+                if not na(poc_price) and not na(high) and not na(low)
+                    if high >= poc_price and low <= poc_price
+                        line.set_x2(l, bar_index[1])
+                        array.set(poc_active, j, false)
+                    else
+                        line.set_x2(l, bar_index)
 
 if is_new_period and not na(period_start_bar) and not na(period_highs) and array.size(period_highs) > 0
     // Compute POC for completed period
@@ -95,8 +111,12 @@ if is_new_period and not na(period_start_bar) and not na(period_highs) and array
             completed_poc := poc_price
             if array.size(poc_lines) >= 30
                 line.delete(array.shift(poc_lines))
-            line l = line.new(time[1], poc_price, time, poc_price, xloc=xloc.bar_time, extend=extend.right, color=color.new(#2196F3, 0), style=line.style_solid, width=1)
+                array.shift(poc_active)
+                array.shift(poc_period)
+            line l = line.new(bar_index[1], poc_price, bar_index, poc_price, xloc=xloc.bar_index, extend=extend.none, color=color.new(#2196F3, 0), style=line.style_solid, width=1)
             array.push(poc_lines, l)
+            array.push(poc_active, true)
+            array.push(poc_period, period_start_bar)
 if is_new_period or na(period_start_bar)
     period_start_bar := bar_index
     period_highs := array.copy(hs)

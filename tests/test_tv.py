@@ -691,16 +691,34 @@ class TestPineEditor:
 
     async def test_pine_set_source(self, mock_cdp):
         tv, cdp = mock_cdp
-        await tv.pine_set_source("//@version=6\nindicator('test')")
-        expr = cdp.evaluate.call_args_list[0][0][0]
-        assert "monaco-editor" in expr
-        assert "setValue" in expr
+        cdp.evaluate.side_effect = [True, None]
+        with patch.object(tv, "_ensure_pine_editor_open", AsyncMock(return_value=True)):
+            await tv.pine_set_source("//@version=6\nindicator('test')")
+        calls = [a[0][0] for a in cdp.evaluate.call_args_list]
+        assert any("setValue" in c for c in calls)
 
     async def test_pine_compile(self, mock_cdp):
         tv, cdp = mock_cdp
-        cdp.evaluate.return_value = None
-        result = await tv.pine_compile()
+        cdp.evaluate.side_effect = [
+            2,      # studies_before
+            None,   # ad-close
+            "Pine Save",  # button click
+            None,         # ad-close
+            [],     # errors
+            None,   # ad-close
+            2,      # studies_after
+            None,   # ad-close
+            [],     # runtime dom_errors
+            None,   # ad-close
+            [],     # runtime study_errors
+            None,   # ad-close
+        ]
+        with patch.object(tv, "_ensure_pine_editor_open", AsyncMock(return_value=True)):
+            result = await tv.pine_compile()
         assert "errors" in result
+        assert result["button_clicked"] == "Pine Save"
+        assert result["study_added"] is False
+        assert result["has_errors"] is False
 
 
 class TestUI:

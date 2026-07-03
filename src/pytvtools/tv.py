@@ -1372,6 +1372,9 @@ class TV:
         Walks the React fiber tree to find the Monaco editor instance
         and calls ``editor.setValue()`` — the standard Monaco API.
         """
+        editor_open = await self._ensure_pine_editor_open()
+        if not editor_open:
+            raise RuntimeError("Could not open Pine Editor.")
         escaped = source.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
         result = await self._eval(f"""
         (function() {{
@@ -1384,27 +1387,92 @@ class TV:
         if not result:
             raise RuntimeError("Failed to set Pine Script source")
 
+    async def _ensure_pine_editor_open(self) -> bool:
+        """Open the Pine Editor panel and wait for Monaco to become available."""
+        already = await self._eval(f"(function() {{ return {self._FIND_MONACO} !== null; }})()")
+        if already:
+            return True
+        await self._eval("""
+        (function() {
+            var btn = document.querySelector('[data-name="pine-dialog-button"]');
+            if (!btn) {
+                var btns = document.querySelectorAll('button');
+                for (var i = 0; i < btns.length; i++) {
+                    var aria = (btns[i].getAttribute('aria-label') || '').toLowerCase();
+                    var dname = (btns[i].getAttribute('data-name') || '').toLowerCase();
+                    if (aria.indexOf('pine') >= 0 || dname.indexOf('pine') >= 0) {
+                        btn = btns[i];
+                        break;
+                    }
+                }
+            }
+            if (btn) btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
+        })()
+        """)
+        import asyncio
+        for _ in range(50):
+            await asyncio.sleep(0.2)
+            ready = await self._eval(f"(function() {{ return {self._FIND_MONACO} !== null; }})()")
+            if ready:
+                return True
+        return False
+
     async def pine_compile(self) -> dict[str, Any]:
-        """Click the compile button and return errors from Monaco markers."""
+        """Click the compile button and return errors from Monaco markers.
+
+        Returns:
+            dict with keys:
+                button_clicked: str | None — which button was clicked
+                has_errors: bool — whether compilation errors exist
+                errors: list[dict] — Monaco marker errors
+                runtime_errors: list[dict] — runtime errors from the chart
+                study_added: bool | None — whether a new study appeared
+        """
+        import asyncio
+        editor_open = await self._ensure_pine_editor_open()
+        if not editor_open:
+            raise RuntimeError("Could not open Pine Editor.")
+
+        studies_before = await self._eval("""
+        (function() {
+            try {
+                var chart = window.TradingViewApi._activeChartWidgetWV.value();
+                if (chart && typeof chart.getAllStudies === 'function')
+                    return chart.getAllStudies().length;
+            } catch(e) {}
+            return null;
+        })()
+        """)
+
         clicked = await self._eval("""
         (function() {
             var btns = document.querySelectorAll('button');
-            var fallback = null;
+            var addBtn = null;
+            var updateBtn = null;
+            var saveBtn = null;
             for (var i = 0; i < btns.length; i++) {
                 var text = btns[i].textContent.trim();
                 if (/save and add to chart/i.test(text)) {
                     btns[i].click();
-                    return 'save_and_add';
+                    return 'Save and add to chart';
                 }
-                if (!fallback && /^(Add to chart|Update on chart)/i.test(text)) {
-                    fallback = btns[i];
+                if (!addBtn && /^Add to chart$/i.test(text)) {
+                    addBtn = btns[i];
+                }
+                if (!updateBtn && /^Update on chart$/i.test(text)) {
+                    updateBtn = btns[i];
+                }
+                if (!saveBtn && btns[i].className.indexOf('saveButton') !== -1 && btns[i].offsetParent !== null) {
+                    saveBtn = btns[i];
                 }
             }
-            if (fallback) { fallback.click(); return fallback.textContent.trim(); }
+            if (addBtn) { addBtn.click(); return 'Add to chart'; }
+            if (updateBtn) { updateBtn.click(); return 'Update on chart'; }
+            if (saveBtn) { saveBtn.click(); return 'Pine Save'; }
             return null;
         })()
         """)
-        import asyncio
+
         if not clicked:
             await self._cdp.send_command("Input.dispatchKeyEvent", {
                 "type": "rawKeyDown", "modifiers": 2, "windowsVirtualKeyCode": 13,
@@ -1412,6 +1480,7 @@ class TV:
             await self._cdp.send_command("Input.dispatchKeyEvent", {
                 "type": "keyUp", "modifiers": 2, "windowsVirtualKeyCode": 13,
             })
+
         await asyncio.sleep(2)
         errors = await self._eval(f"""
         (function() {{
@@ -1431,8 +1500,30 @@ class TV:
         }})()
         """)
         await asyncio.sleep(1)
+
+        studies_after = await self._eval("""
+        (function() {
+            try {
+                var chart = window.TradingViewApi._activeChartWidgetWV.value();
+                if (chart && typeof chart.getAllStudies === 'function')
+                    return chart.getAllStudies().length;
+            } catch(e) {}
+            return null;
+        })()
+        """)
+
+        study_added = None
+        if studies_before is not None and studies_after is not None:
+            study_added = studies_after > studies_before
+
         runtime = await self.check_pine_runtime_errors()
-        return {"errors": errors, "runtime_errors": runtime}
+        return {
+            "button_clicked": clicked,
+            "has_errors": len(errors) > 0,
+            "errors": errors,
+            "runtime_errors": runtime,
+            "study_added": study_added,
+        }
 
     async def add_pine_script(self, source: str) -> str:
         """Inject Pine Script source via the editor, compile, and return entity ID.
@@ -1442,38 +1533,8 @@ class TV:
         compilation errors or ``PineEntityNotFoundError`` if no entity
         appears after compilation.
         """
-        # Fetch existing study IDs before adding
         studies_before = await self._get_study_ids()
 
-        # Open the Pine Editor dialog (only if not already open — the
-        # [data-name="pine-dialog-button"] is a toggle and would close it).
-        editor_open = await self._eval(
-            "!!document.querySelector('.monaco-editor.pine-editor-monaco')"
-        )
-        if not editor_open:
-            await self._eval("""
-            (function() {
-                var btn = document.querySelector('[data-name="pine-dialog-button"]');
-                if (!btn) {
-                    var btns = document.querySelectorAll('button');
-                    for (var i = 0; i < btns.length; i++) {
-                        var aria = (btns[i].getAttribute('aria-label') || '').toLowerCase();
-                        var dname = (btns[i].getAttribute('data-name') || '').toLowerCase();
-                        if (aria.indexOf('pine') >= 0 || dname.indexOf('pine') >= 0) {
-                            btn = btns[i];
-                            break;
-                        }
-                    }
-                }
-                if (btn) {
-                    btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
-                }
-            })()
-            """)
-        import asyncio
-        await asyncio.sleep(2)
-
-        # Set the source code
         await self.pine_set_source(source)
 
         # Compile and collect errors
