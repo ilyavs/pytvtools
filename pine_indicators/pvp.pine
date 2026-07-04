@@ -4,6 +4,10 @@
 // a volume histogram per period, draws completed-period POCs via line.new.
 //
 // Pine v6: always array.concat() for LTF arrays, never push() in a loop.
+//
+// Rendering cap: TV renders at most 50 line.new objects per indicator
+// regardless of max_poc_lines. max_poc_lines controls how many lines
+// we store (old ones get deleted first-in-first-out).
 indicator(title="Periodic Volume Profile (Custom)", shorttitle="PVP_Custom", overlay=true, format=format.price, precision=2)
 
 period_mult   = input.int(1, "Period Multiplier", group="Period")

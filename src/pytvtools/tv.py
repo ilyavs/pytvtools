@@ -2355,30 +2355,41 @@ function _getMonacoErrors() {
             var filter = '{study_filter or ''}';
             for (var si = 0; si < sources.length; si++) {{
                 var s = sources[si];
-                if (!s.metaInfo) continue;
-                try {{
-                    var meta = s.metaInfo();
-                    var name = meta.description || meta.shortDescription || '';
-                    if (!name) continue;
-                    if (filter && name.indexOf(filter) === -1) continue;
-                    var g = s._graphics;
-                    if (!g || !g._primitivesCollection) continue;
-                    var pc = g._primitivesCollection;
-                    var items = [];
+                var name;
+                try {{ name = s.title ? s.title() : ''; }} catch(e) {{ name = ''; }}
+                if (!name) {{
                     try {{
-                        var outer = pc.dwglines;
-                        if (outer) {{
-                            var inner = outer.get('lines');
-                            if (inner) {{
-                                var coll = inner.get(false);
-                                if (coll && coll._primitivesDataById && coll._primitivesDataById.size > 0) {{
-                                    coll._primitivesDataById.forEach(function(v, id) {{ items.push({{id: id, raw: v}}); }});
+                        var meta = s.metaInfo ? s.metaInfo() : null;
+                        name = (meta && (meta.description || meta.shortDescription)) || '';
+                    }} catch(e) {{ name = ''; }}
+                }}
+                if (!name) continue;
+                if (filter && name.indexOf(filter) === -1) continue;
+                var g = s._graphics;
+                if (!g || !g._primitivesCollection) continue;
+                var pc = g._primitivesCollection;
+                var items = [];
+                try {{
+                    var outer = pc.dwglines;
+                    if (outer) {{
+                        var inner = outer.get('lines');
+                        if (inner) {{
+                            var coll = inner.get(false);
+                            if (coll && coll._primitivesDataById) {{
+                                var byId = coll._primitivesDataById;
+                                if (typeof byId.forEach === 'function') {{
+                                    byId.forEach(function(v, id) {{ items.push({{id: id, raw: v}}); }});
+                                }} else {{
+                                    var keys = Object.keys(byId);
+                                    for (var ki = 0; ki < keys.length; ki++) {{
+                                        items.push({{id: keys[ki], raw: byId[keys[ki]]}});
+                                    }}
                                 }}
                             }}
                         }}
-                    }} catch(e) {{}}
-                    if (items.length > 0) results.push({{name: name, count: items.length, items: items}});
+                    }}
                 }} catch(e) {{}}
+                if (items.length > 0) results.push({{name: name, count: items.length, items: items}});
             }}
 
             var flat = [];

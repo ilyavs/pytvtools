@@ -12,8 +12,9 @@ Rules and gotchas for the custom PVP indicator at `pine_indicators/pvp.pine` and
 The custom PVP is a Pine Script (v6) indicator that:
 1. Fetches lower-TF bars via `request.security_lower_tf()` for sub-bar precision
 2. Builds a volume histogram per period (Day/Week/Month)
-3. Reports developing POC on each bar  (plot 0)
-4. Draws completed-period POCs as horizontal lines via `line.new()`  (plot 1 = period boundary marker)
+3. Draws completed-period POCs as horizontal lines via `line.new()`  (plot 0 = period boundary marker)
+
+**Rendering cap:** TV renders at most 50 `line.new` objects per indicator regardless of `max_poc_lines` input. The input controls in-Pine storage (FIFO deletion when exceeded) but TV's internal `_primitivesDataById` caps at 50 visible objects. `max_poc_lines` has `maxval=500` but anything above 50 is invisible.
 
 ## Implementation Rules
 
@@ -156,6 +157,16 @@ var price = model.coordinateToPrice(y, priceScaleId);
 ```
 
 The built-in PVP stores lines at `_paneViews[4]._data` — the index differs between built-in and custom Pine scripts.
+
+## Reading POC lines via CDP
+
+`tv.get_pine_lines(study_filter)` reads from `_primitivesDataById` via the internal getter path `_activeChartWidgetWV → _chartWidget.model().model().dataSources()[i]._graphics._primitivesCollection.dwglines.get("lines").get(false)._primitivesDataById`.
+
+Gotchas:
+
+1. **Name resolution:** USER; scripts (pine-facade deployed) expose their display name via `title()` method, not `metaInfo()`. The JS in `get_pine_lines` tries `title()` first, falls back to `metaInfo()`.
+2. **`_primitivesDataById` format:** Can be either a `Map` with `.forEach()` or a plain object with numeric string keys. `Object.keys()` fallback is always used when `.forEach` is absent.
+3. **Rendering cap:** TV renders max 50 `line.new` objects per indicator in `_primitivesDataById`. Calling `get_pine_lines()` returns at most 50 deduplicated price levels.
 
 ## Parity Testing
 

@@ -317,9 +317,11 @@ completed-period POCs. Key rules when editing:
 - **Pine v6 array limitation**: Never use `for`-loop + `array.push()` with
   `security_lower_tf` arrays — `push()` silently fails.  Always use
   `array.copy()` for initial assignment and `array.concat()` to append.
-- **Plots**: Plot 0 = developing POC (changes every bar), Plot 1 = period
-  boundary marker (1.0 at new-period start).  Completed POCs are in
-  `completed_poc_prices` array, drawn as lines.
+- **Plots**: Only plot is Period Marker (1.0 at new-period start). No developing
+  POC plot — completed POC values are drawn via `line.new` only.
+- **TV rendering cap**: TV renders at most 50 `line.new` objects per indicator in
+  `_primitivesDataById`. `max_poc_lines` input controls in-Pine storage only;
+  anything above 50 is invisible.
 - **POC formula**: `pls_min + (poc_row + 0.5) * tick_size` — center-of-row
 - **Testing**: Use `compare_pvp(tv, symbol, timeframe)` from
   `pytvtools.indicator_parity`.  It compares at **last-bar-before-gap**
