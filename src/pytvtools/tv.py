@@ -46,6 +46,25 @@ class PineEntityNotFoundError(RuntimeError):
 _CHART_API = "window.TradingViewApi.chart()"
 _REPLAY_API = "window.TradingViewApi._replayApi"
 
+# pine-facade REST API — used for creating/listing/updating Pine scripts
+# outside the Pine Editor (bypasses the compilation cache).
+_PINE_FACADE = "https://pine-facade.tradingview.com/pine-facade"
+
+# Synchronous XHR helper for pine-facade calls (CDP evaluate captures sync
+# results reliably, unlike async fetch with awaitPromise).
+_PINE_XHR = """
+(function(method, url, body) {
+    var xhr = new XMLHttpRequest();
+    xhr.open(method, url, false);
+    xhr.withCredentials = true;
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    xhr.setRequestHeader('Accept', 'application/json');
+    xhr.setRequestHeader('Referer', 'https://www.tradingview.com/');
+    xhr.send(body || null);
+    return JSON.parse(xhr.responseText);
+})
+"""
+
 
 
 # ---------------------------------------------------------------------------
@@ -743,6 +762,13 @@ class TV:
                 return {_CHART_API}._createStudy({{type: "pine", pineId: {_js_str(indicator)}}});
             }})()
             """, await_promise=True)
+        elif indicator.startswith("USER;"):
+            # User-created script saved via pine-facade — use _createStudy
+            eid = await self._eval(f"""
+            (function() {{
+                return {_CHART_API}._createStudy({{type: "pine", pineId: {_js_str(indicator)}}});
+            }})()
+            """, await_promise=True)
         else:
             # Display name — use public createStudy
             try:
@@ -1339,7 +1365,16 @@ class TV:
 
     _FIND_MONACO: str = """
 (function() {
-    var container = document.querySelector('.monaco-editor.pine-editor-monaco');
+    var containers = document.querySelectorAll('.monaco-editor.pine-editor-monaco');
+    if (!containers || containers.length === 0) return null;
+    var container = null;
+    for (var ci = 0; ci < containers.length; ci++) {
+        var rect = containers[ci].getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+            container = containers[ci];
+            break;
+        }
+    }
     if (!container) return null;
     var el = container;
     var fiberKey;
@@ -1357,7 +1392,7 @@ class TV:
             var env = current.memoizedProps.value.monacoEnv;
             if (env.editor && typeof env.editor.getEditors === 'function') {
                 var editors = env.editor.getEditors();
-                if (editors.length > 0) return { editor: editors[0], env: env };
+                if (editors.length > 0) return true;
             }
         }
         current = current.return;
@@ -1366,30 +1401,147 @@ class TV:
 })()
 """
 
-    async def pine_set_source(self, source: str) -> None:
-        """Set Pine Script source in the editor via Monaco API directly.
+    _SET_MONACO_VALUE: str = """
+function _setMonacoValue(source) {
+    var containers = document.querySelectorAll('.monaco-editor.pine-editor-monaco');
+    if (!containers || containers.length === 0) return null;
+    var container = null;
+    for (var ci = 0; ci < containers.length; ci++) {
+        var rect = containers[ci].getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+            container = containers[ci];
+            break;
+        }
+    }
+    if (!container) return null;
+    var el = container;
+    for (var i = 0; i < 20; i++) {
+        if (!el) break;
+        var fiberKey = Object.keys(el).find(function(k) { return k.startsWith('__reactFiber$'); });
+        if (fiberKey) {
+            var current = el[fiberKey];
+            for (var d = 0; d < 15; d++) {
+                if (!current) break;
+                if (current.memoizedProps && current.memoizedProps.value && current.memoizedProps.value.monacoEnv) {
+                    var env = current.memoizedProps.value.monacoEnv;
+                    if (env.editor && typeof env.editor.getEditors === 'function') {
+                        var editors = env.editor.getEditors();
+                        if (editors.length > 0) {
+                            editors[0].setValue(source);
+                            return true;
+                        }
+                    }
+                }
+                current = current.return;
+            }
+            return null;
+        }
+        el = el.parentElement;
+    }
+    return null;
+}
+"""
 
-        Walks the React fiber tree to find the Monaco editor instance
-        and calls ``editor.setValue()`` — the standard Monaco API.
-        """
+    _GET_MONACO_SOURCE: str = """
+function _getMonacoSource() {
+    var containers = document.querySelectorAll('.monaco-editor.pine-editor-monaco');
+    if (!containers || containers.length === 0) return null;
+    var container = null;
+    for (var ci = 0; ci < containers.length; ci++) {
+        var rect = containers[ci].getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+            container = containers[ci];
+            break;
+        }
+    }
+    if (!container) return null;
+    var el = container;
+    for (var i = 0; i < 20; i++) {
+        if (!el) break;
+        var fiberKey = Object.keys(el).find(function(k) { return k.startsWith('__reactFiber$'); });
+        if (fiberKey) {
+            var current = el[fiberKey];
+            for (var d = 0; d < 15; d++) {
+                if (!current) break;
+                if (current.memoizedProps && current.memoizedProps.value && current.memoizedProps.value.monacoEnv) {
+                    var env = current.memoizedProps.value.monacoEnv;
+                    if (env.editor && typeof env.editor.getEditors === 'function') {
+                        var editors = env.editor.getEditors();
+                        if (editors.length > 0) return editors[0].getValue();
+                    }
+                }
+                current = current.return;
+            }
+            return null;
+        }
+        el = el.parentElement;
+    }
+    return null;
+}
+"""
+
+    _GET_MONACO_ERRORS: str = """
+function _getMonacoErrors() {
+    var containers = document.querySelectorAll('.monaco-editor.pine-editor-monaco');
+    if (!containers || containers.length === 0) return [];
+    var container = null;
+    for (var ci = 0; ci < containers.length; ci++) {
+        var rect = containers[ci].getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+            container = containers[ci];
+            break;
+        }
+    }
+    if (!container) return [];
+    var el = container;
+    for (var i = 0; i < 20; i++) {
+        if (!el) break;
+        var fiberKey = Object.keys(el).find(function(k) { return k.startsWith('__reactFiber$'); });
+        if (fiberKey) {
+            var current = el[fiberKey];
+            for (var d = 0; d < 15; d++) {
+                if (!current) break;
+                if (current.memoizedProps && current.memoizedProps.value && current.memoizedProps.value.monacoEnv) {
+                    var env = current.memoizedProps.value.monacoEnv;
+                    if (env.editor && typeof env.editor.getEditors === 'function') {
+                        var editors = env.editor.getEditors();
+                        if (editors.length > 0) {
+                            var model = editors[0].getModel();
+                            if (!model) return [];
+                            var markers = env.editor.getModelMarkers({ resource: model.uri });
+                            return markers.map(function(mk) {
+                                return { line: mk.startLineNumber, column: mk.startColumn, message: mk.message, severity: mk.severity };
+                            });
+                        }
+                    }
+                }
+                current = current.return;
+            }
+            return [];
+        }
+        el = el.parentElement;
+    }
+    return [];
+}
+"""
+
+    async def pine_set_source(self, source: str) -> None:
+        """Set Pine Script source in the editor via Monaco API directly."""
         editor_open = await self._ensure_pine_editor_open()
         if not editor_open:
             raise RuntimeError("Could not open Pine Editor.")
-        escaped = source.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
+        import json
+        source_js = json.dumps(source)
         result = await self._eval(f"""
-        (function() {{
-            var m = {self._FIND_MONACO};
-            if (!m) throw new Error('Monaco editor not found — Pine Editor may not be open');
-            m.editor.setValue(`{escaped}`);
-            return true;
-        }})()
+            {self._SET_MONACO_VALUE}
+            _setMonacoValue({source_js});
         """)
-        if not result:
+        if result is None or result is False:
             raise RuntimeError("Failed to set Pine Script source")
 
     async def _ensure_pine_editor_open(self) -> bool:
         """Open the Pine Editor panel and wait for Monaco to become available."""
-        already = await self._eval(f"(function() {{ return {self._FIND_MONACO} !== null; }})()")
+        already = await self._eval(f"(function() {{ var _m = {self._FIND_MONACO}; return _m !== null; }})()")
         if already:
             return True
         await self._eval("""
@@ -1412,7 +1564,7 @@ class TV:
         import asyncio
         for _ in range(50):
             await asyncio.sleep(0.2)
-            ready = await self._eval(f"(function() {{ return {self._FIND_MONACO} !== null; }})()")
+            ready = await self._eval(f"(function() {{ var _m = {self._FIND_MONACO}; return _m !== null; }})()")
             if ready:
                 return True
         return False
@@ -1444,35 +1596,30 @@ class TV:
         })()
         """)
 
+        # First, try to find Add/Update buttons (compilation may already be done)
         clicked = await self._eval("""
         (function() {
             var btns = document.querySelectorAll('button');
-            var addBtn = null;
-            var updateBtn = null;
-            var saveBtn = null;
             for (var i = 0; i < btns.length; i++) {
                 var text = btns[i].textContent.trim();
                 if (/save and add to chart/i.test(text)) {
                     btns[i].click();
                     return 'Save and add to chart';
                 }
-                if (!addBtn && /^Add to chart$/i.test(text)) {
-                    addBtn = btns[i];
+                if (/Add to chart/i.test(text)) {
+                    btns[i].click();
+                    return 'Add to chart';
                 }
-                if (!updateBtn && /^Update on chart$/i.test(text)) {
-                    updateBtn = btns[i];
-                }
-                if (!saveBtn && btns[i].className.indexOf('saveButton') !== -1 && btns[i].offsetParent !== null) {
-                    saveBtn = btns[i];
+                if (/Update on chart/i.test(text)) {
+                    btns[i].click();
+                    return 'Update on chart';
                 }
             }
-            if (addBtn) { addBtn.click(); return 'Add to chart'; }
-            if (updateBtn) { updateBtn.click(); return 'Update on chart'; }
-            if (saveBtn) { saveBtn.click(); return 'Pine Save'; }
             return null;
         })()
         """)
 
+        # If no Add/Update button found, compile first then look again
         if not clicked:
             await self._cdp.send_command("Input.dispatchKeyEvent", {
                 "type": "rawKeyDown", "modifiers": 2, "windowsVirtualKeyCode": 13,
@@ -1480,24 +1627,36 @@ class TV:
             await self._cdp.send_command("Input.dispatchKeyEvent", {
                 "type": "keyUp", "modifiers": 2, "windowsVirtualKeyCode": 13,
             })
+            await asyncio.sleep(3)
+            clicked = await self._eval("""
+            (function() {
+                var btns = document.querySelectorAll('button');
+                for (var i = 0; i < btns.length; i++) {
+                    var text = btns[i].textContent.trim();
+                    if (/Add to chart/i.test(text)) {
+                        btns[i].click();
+                        return 'Add to chart';
+                    }
+                    if (/Update on chart/i.test(text)) {
+                        btns[i].click();
+                        return 'Update on chart';
+                    }
+                }
+                var saveBtn = null;
+                for (var i = 0; i < btns.length; i++) {
+                    if (btns[i].className.indexOf('saveButton') !== -1 && btns[i].offsetParent !== null) {
+                        btns[i].click();
+                        return 'Pine Save';
+                    }
+                }
+                return null;
+            })()
+            """)
 
         await asyncio.sleep(2)
         errors = await self._eval(f"""
-        (function() {{
-            var m = {self._FIND_MONACO};
-            if (!m) return [];
-            var model = m.editor.getModel();
-            if (!model) return [];
-            var markers = m.env.editor.getModelMarkers({{ resource: model.uri }});
-            return markers.map(function(mk) {{
-                return {{
-                    line: mk.startLineNumber,
-                    column: mk.startColumn,
-                    message: mk.message,
-                    severity: mk.severity,
-                }};
-            }});
-        }})()
+            {self._GET_MONACO_ERRORS}
+            _getMonacoErrors();
         """)
         await asyncio.sleep(1)
 
@@ -1533,6 +1692,7 @@ class TV:
         compilation errors or ``PineEntityNotFoundError`` if no entity
         appears after compilation.
         """
+        import asyncio
         studies_before = await self._get_study_ids()
 
         await self.pine_set_source(source)
@@ -1577,21 +1737,8 @@ class TV:
     async def pine_get_errors(self) -> list[dict]:
         """Read Pine Script compilation errors from Monaco markers."""
         return await self._eval(f"""
-        (function() {{
-            var m = {self._FIND_MONACO};
-            if (!m) return [];
-            var model = m.editor.getModel();
-            if (!model) return [];
-            var markers = m.env.editor.getModelMarkers({{ resource: model.uri }});
-            return markers.map(function(mk) {{
-                return {{
-                    line: mk.startLineNumber,
-                    column: mk.startColumn,
-                    message: mk.message,
-                    severity: mk.severity,
-                }};
-            }});
-        }})()
+            {self._GET_MONACO_ERRORS}
+            _getMonacoErrors();
         """)
 
     async def check_pine_runtime_errors(self) -> list[dict]:
@@ -1804,11 +1951,8 @@ class TV:
     async def pine_get_editor_source(self) -> str | None:
         """Read the current Pine Script source from the editor."""
         return await self._eval(f"""
-        (function() {{
-            var m = {self._FIND_MONACO};
-            if (!m) return null;
-            return m.editor.getValue();
-        }})()
+            {self._GET_MONACO_SOURCE}
+            _getMonacoSource();
         """)
 
     async def pine_close_editor(self) -> bool:
@@ -1830,6 +1974,149 @@ class TV:
             return false;
         })()
         """))
+
+    # ── pine-facade REST API helpers (bypass Pine Editor cache) ──
+
+    async def pine_facade_list(self) -> list[dict[str, Any]]:
+        """List saved Pine scripts via ``pine-facade/list/``.
+
+        Returns a list of script descriptors, each with ``scriptIdPart``,
+        ``scriptName``, ``scriptTitle``, ``version``, etc.
+        """
+        result = await self._eval(f"""
+            (function() {{
+                var _xhr = {_PINE_XHR};
+                return _xhr('GET', '{_PINE_FACADE}/list/?filter=saved', null);
+            }})()
+        """)
+        if isinstance(result, list):
+            return result
+        return result.get("result", []) if isinstance(result, dict) else []
+
+    async def pine_facade_save_new(
+        self, name: str, source: str
+    ) -> dict[str, Any]:
+        """Create a new Pine script via ``pine-facade/save/new``.
+
+        This gives the script a **fresh** ``scriptIdPart`` (pineId),
+        bypassing any cached compilation.  The compiled IL is returned
+        in the response; use :meth:`pine_facade_list` to discover the
+        new pineId.
+
+        Parameters
+        ----------
+        name : str
+            Display name for the new script.
+        source : str
+            Full Pine Script source (including ``//@version=6`` header).
+
+        Returns
+        -------
+        dict
+            API response — ``{"success": true, ...}`` on success.
+        """
+        return await self._eval(f"""
+            (function() {{
+                var _xhr = {_PINE_XHR};
+                return _xhr(
+                    'POST',
+                    '{_PINE_FACADE}/save/new?name=' + encodeURIComponent({json.dumps(name)}) + '&allow_overwrite=true',
+                    'source=' + encodeURIComponent({json.dumps(source)})
+                );
+            }})()
+        """)
+
+    async def pine_facade_save_next(
+        self, pine_id: str, name: str, source: str
+    ) -> dict[str, Any]:
+        """Update an existing Pine script via ``pine-facade/save/next``.
+
+        Bumps the version number; the ``scriptIdPart`` stays the same.
+
+        Parameters
+        ----------
+        pine_id : str
+            The ``scriptIdPart`` to update (e.g. ``USER;abc123``).
+        name : str
+            Display name for the script.
+        source : str
+            Full Pine Script source (including ``//@version=6`` header).
+        """
+        return await self._eval(f"""
+            (function() {{
+                var _xhr = {_PINE_XHR};
+                return _xhr(
+                    'POST',
+                    '{_PINE_FACADE}/save/next/{pine_id}?name=' + encodeURIComponent({json.dumps(name)}) + '&allow_create_new=false',
+                    'source=' + encodeURIComponent({json.dumps(source)})
+                );
+            }})()
+        """)
+
+    async def pine_facade_deploy(self, source: str, name: str | None = None) -> str:
+        """Save a Pine script as a **new** entity and add it to the chart.
+
+        Combines :meth:`pine_facade_save_new` and :meth:`add_indicator`
+        to bypass the Pine Editor compilation cache entirely.
+
+        Parameters
+        ----------
+        source : str
+            Full Pine Script source (including ``//@version=6`` header).
+        name : str | None
+            Display name.  If ``None``, the ``indicator(title=...)`` from
+            the source is extracted (fallback ``"PineScript"``).
+
+        Returns
+        -------
+        str
+            Entity ID of the added indicator on the chart.
+
+        Raises
+        ------
+        RuntimeError
+            If the save or add operation fails.
+        """
+        import re as _re
+        if name is None:
+            m = _re.search(r'indicator\s*\(\s*title\s*=\s*"([^"]+)"', source)
+            name = m.group(1) if m else "PineScript"
+        # 1. Save as new script (fresh pineId)
+        resp = await self.pine_facade_save_new(name, source)
+        if not resp.get("success"):
+            raise RuntimeError(
+                f"pine-facade save/new failed: {resp.get('reason', resp)}"
+            )
+        # 2. List to discover the new pineId
+        scripts = await self.pine_facade_list()
+        pine_id = None
+        for s in scripts:
+            if s.get("scriptName") == name or s.get("scriptTitle") == name:
+                pine_id = s["scriptIdPart"]
+                break
+        if not pine_id:
+            # Fallback: try the last USER; script
+            user_scripts = [s for s in scripts if s.get("scriptIdPart", "").startswith("USER;")]
+            if user_scripts:
+                pine_id = user_scripts[-1]["scriptIdPart"]
+        if not pine_id:
+            raise RuntimeError(
+                f"Could not find pineId for '{name}' after saving"
+            )
+        # 3. Add to chart via _createStudy
+        eid = await self._eval(f"""
+            (function() {{
+                return {_CHART_API}._createStudy({{type: "pine", pineId: {json.dumps(pine_id)}}});
+            }})()
+        """, await_promise=True)
+        if not eid:
+            # Sometimes _createStudy succeeds but returns undefined;
+            # look for the newest study
+            studies = await self._get_study_ids()
+            eid = studies[-1] if studies else None
+        if eid:
+            self._indicator_ids.add(eid)
+        return eid
 
     async def _get_script_page_url(self, study_id: str) -> str | None:
         """Resolve ``PUB;id`` to its TradingView script page URL.
@@ -2061,38 +2348,59 @@ class TV:
     ) -> list[dict[str, Any]]:
         js = f"""
         (function() {{
-            var c = {_CHART_API};
-            var m = c.chartWidget().model();
-            var panes = m.panes();
-            var result = [];
-
-            function collect(src) {{
-                if (!src) return;
-                var g = src._graphics;
-                if (!g || !g._items) return;
-                for (var i = 0; i < g._items.length; i++) {{
-                    var item = g._items[i];
-                    if (!item || !item.value) continue;
-                    var v = item.value;
-                    var price = v.price !== undefined ? v.price : (v.y !== undefined ? v.y : null);
-                    if (price === null) continue;
-                    var text = v.text || v.label || '';
-                    result.push({{id: item.id || '', price: price, text: text}});
-                }}
+            var chart = window.TradingViewApi._activeChartWidgetWV.value()._chartWidget;
+            var model = chart.model();
+            var sources = model.model().dataSources();
+            var results = [];
+            var filter = '{study_filter or ''}';
+            for (var si = 0; si < sources.length; si++) {{
+                var s = sources[si];
+                if (!s.metaInfo) continue;
+                try {{
+                    var meta = s.metaInfo();
+                    var name = meta.description || meta.shortDescription || '';
+                    if (!name) continue;
+                    if (filter && name.indexOf(filter) === -1) continue;
+                    var g = s._graphics;
+                    if (!g || !g._primitivesCollection) continue;
+                    var pc = g._primitivesCollection;
+                    var items = [];
+                    try {{
+                        var outer = pc.dwglines;
+                        if (outer) {{
+                            var inner = outer.get('lines');
+                            if (inner) {{
+                                var coll = inner.get(false);
+                                if (coll && coll._primitivesDataById && coll._primitivesDataById.size > 0) {{
+                                    coll._primitivesDataById.forEach(function(v, id) {{ items.push({{id: id, raw: v}}); }});
+                                }}
+                            }}
+                        }}
+                    }} catch(e) {{}}
+                    if (items.length > 0) results.push({{name: name, count: items.length, items: items}});
+                }} catch(e) {{}}
             }}
 
-            for (var p = 0; p < panes.length; p++) {{
-                var sources = panes[p].dataSources();
-                for (var s = 0; s < sources.length; s++) {{
-                    collect(sources[s]);
+            var flat = [];
+            var seen = {{}};
+            for (var ri = 0; ri < results.length; ri++) {{
+                var study = results[ri];
+                for (var ii = 0; ii < study.items.length; ii++) {{
+                    var item = study.items[ii];
+                    var v = item.raw;
+                    var y1 = v.y1 != null ? Math.round(v.y1 * 100) / 100 : null;
+                    var y2 = v.y2 != null ? Math.round(v.y2 * 100) / 100 : null;
+                    if (y1 != null && y1 === y2 && !seen[y1]) {{
+                        seen[y1] = true;
+                        flat.push({{id: item.id, price: y1, text: study.name}});
+                    }}
                 }}
             }}
-            return result;
+            flat.sort(function(a, b) {{ return b.price - a.price; }});
+            return flat;
         }})()
         """
         raw = await self._eval(js) or []
-        if study_filter:
-            raw = [l for l in raw if study_filter.lower() in l.get("text", "").lower()]
         return raw
 
     async def get_pine_labels(

@@ -95,7 +95,7 @@ async with TVData() as d:
 - `list_templates(tab=None)` → `[{name, description}]` — tab: "my templates", "technicals", "financials"
 - `apply_template(name)` — apply a saved indicator template (searches all tabs)
 - `capture_screenshot()` → base64 PNG
-- `get_pine_lines(study_filter=None)` → price levels
+- `get_pine_lines(study_filter=None)` → horizontal price levels (reads `pc.dwglines.get('lines').get(false)._primitivesDataById` via `_activeChartWidgetWV` — the internal getter path, NOT `window.TradingViewApi.chart()`)
 - `get_pine_labels(study_filter=None, max_labels=50)` → text labels
 - `batch(symbols, timeframes, action, max_bars=500)` — multi-symbol scan (CDP-based, handles rate limits)
 - `get_ohlcv_multi(symbols, interval, bars_count, summary, max_concurrent=10)` — parallel WS fetch, no Chrome needed
@@ -322,7 +322,9 @@ completed-period POCs. Key rules when editing:
   `completed_poc_prices` array, drawn as lines.
 - **POC formula**: `pls_min + (poc_row + 0.5) * tick_size` — center-of-row
 - **Testing**: Use `compare_pvp(tv, symbol, timeframe)` from
-  `pytvtools.indicator_parity` to compare custom vs built-in.
+  `pytvtools.indicator_parity`.  It compares at **last-bar-before-gap**
+  (completed-period POC), NOT the first bar after a gap (developing POC
+  with minimal data).  Default gap_threshold=21600s (6h).
 
 ## Indicator parity (Python vs TradingView)
 

@@ -274,6 +274,28 @@ git push
 - **Prefer direct Python execution over MCP for development.** Interactive `async with TV()` in Python gives faster iteration and better error visibility.
 - **Plan files (`plan/*.md`) are optional** but useful for tracking progress across sessions. Create one per indicator.
 
+### Pine Editor & CDP
+
+- **Monaco fiber-tree detection is fragile across TV versions.** The `_FIND_MONACO` JS walks `__reactFiber$` from a `.monaco-editor.pine-editor-monaco` DOM node up 15 levels looking for `memoizedProps.value.monacoEnv`. TV updates can break this path. Have a fallback plan (`pine_compile` saves via keyboard shortcut `Ctrl+Enter`).
+- **`_eval` makes 2 `cdp.evaluate` calls per invocation** — the main expression + an ad-dismiss safety check. This means every `side_effect` list for tests needs pairs of values, and mock expectations must account for double calls.
+- **Pine compile button detection priority** (highest to lowest):
+  1. "Save and add to chart"
+  2. "Add to chart"
+  3. "Update on chart"
+  4. Button with class `saveButton` that is visible (`.offsetParent !== null`)
+  5. Keyboard shortcut `Ctrl+Enter`
+  The `pine_compile()` return value includes `button_clicked` so you know which path was taken.
+- **`_ensure_pine_editor_open` polls up to 50× at 200ms** (10s total) after clicking the Pine button. If Monaco doesn't appear in that window, the editor likely isn't loading — don't retry.
+- **Page renderer can hang in headless Chrome.** If all CDP commands to a page time out (`Page.enable`, `Runtime.evaluate`, etc.), the renderer process is stuck. Close the target via `Target.closeTarget` (browser-level WS at `/devtools/browser/<uuid>`) and create a fresh one via `Target.createTarget`.
+- **Container CDP port chain:** Docker `0.0.0.0:9222` → socat inside container → Chrome `127.0.0.1:9223`. When debugging connectivity issues, check each hop.
+- **Line objects from `line.new()` in Pine are NOT accessible via `_data._items`** — they live in `_paneViews[1]._renderer._data.items` as pixel-coordinate line segments. To read their prices, convert via `model.coordinateToPrice(y, priceScaleId)`. The `get_pine_lines()` MCP tool reads these but only for known pane view indices (built-in PVP uses index 4).
+
+### Docker/Chrome environment
+
+- **Newly created TV pages are fresh** — no indicators, no Pine Editor, no login. You must set up the chart state (symbol, timeframe, indicators) after creating a new tab.
+- **Browser-level WS URL is different from page-level** — find it at `/json/version` → `webSocketDebuggerUrl`. Use it for `Target.createTarget`/`Target.closeTarget`.
+- **`wait_for_cdp()` defaults to `localhost:9222`.** When running inside Docker, this goes through socat to Chrome's CDP on 9223.
+
 ## Common Pitfalls
 
 | Problem | Fix |

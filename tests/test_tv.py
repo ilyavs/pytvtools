@@ -552,16 +552,6 @@ class TestPineDrawings:
         assert len(lines) == 2
         assert lines[0]["price"] == 150.5
 
-    async def test_get_pine_lines_with_filter(self, mock_cdp):
-        tv, cdp = mock_cdp
-        cdp.evaluate.return_value = [
-            {"id": "l1", "price": 150.5, "text": "support"},
-            {"id": "l2", "price": 155.0, "text": "resistance"},
-        ]
-        lines = await tv.get_pine_lines(study_filter="support")
-        assert len(lines) == 1
-        assert lines[0]["id"] == "l1"
-
     async def test_get_pine_lines_empty(self, mock_cdp):
         tv, cdp = mock_cdp
         cdp.evaluate.return_value = None

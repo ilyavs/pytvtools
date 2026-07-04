@@ -344,11 +344,19 @@ async def compare_pvp(
     timeframe: str = "60",
     *,
     tolerance: float = 0.01,
+    gap_threshold: float = 21600,
 ) -> dict:
     """Compare custom Pine PVP against built-in Periodic Volume Profile.
 
-    Adds both indicators, reads Plot 0 values from each, and compares on
-    timestamps where both have data (completed-period POC bars).
+    Adds both indicators and compares Plot 0 (developing POC) at completed-period
+    boundaries.  Uses gap detection (threshold=gap_threshold seconds) to find
+    period boundaries — the **last bar before a gap** has accumulated all volume
+    data for the completed period, so its developing POC equals the completed
+    period's POC.  Comparing the first bar after the gap (developing POC of the
+    new period with minimal data) would give misleading results.
+
+    Default gap_threshold (21600s = 6h) works for 60m charts where overnight
+    gaps are ~9h.  Adjust for other timeframes or exchange schedules.
 
     Parameters
     ----------
@@ -357,10 +365,11 @@ async def compare_pvp(
     symbol : str
         Symbol to use (e.g. ``"BATS:INTC"``).
     timeframe : str
-        Chart timeframe (e.g. ``"60"`` for 60m — the PVP uses 10m lower-TF
-        internally via ``request.security_lower_tf``).
+        Chart timeframe (e.g. ``"60"`` for 60m).
     tolerance : float
         Max absolute price difference for a match (default 0.01).
+    gap_threshold : float
+        Minimum gap in seconds to detect a period boundary (default 21600 = 6h).
 
     Returns
     -------
@@ -403,6 +412,10 @@ async def compare_pvp(
     custom_eid = await tv.add_pine_script(source)
     await asyncio.sleep(2)
 
+    # Enable developing POC plot — off by default in the script
+    await tv.set_indicator_inputs(custom_eid, {"show_developing": True})
+    await asyncio.sleep(1)
+
     # Wait for custom data
     custom_data = None
     for _ in range(20):
@@ -420,28 +433,35 @@ async def compare_pvp(
         if val is not None:
             custom_by_ts[int(entry["timestamp"])] = val
 
-    # Compare on common timestamps (period-end bars)
+    # Find completed-period boundaries via gap detection.
+    # The LAST bar before a gap > gap_threshold is the last bar of a completed
+    # period.  At that bar, both indicators have accumulated all volume data
+    # for the period, so their developing POC equals the completed period POC.
     common = sorted(set(builtin_by_ts) & set(custom_by_ts))
     matched = 0
     total = 0
     mismatches: list[dict] = []
 
+    prev_ts = None
     for ts in common:
-        b = builtin_by_ts[ts]
-        c = custom_by_ts[ts]
-        if b is None or c is None:
-            continue
-        total += 1
-        delta = abs(b - c)
-        if delta <= tolerance:
-            matched += 1
-        else:
-            mismatches.append({
-                "timestamp": ts,
-                "builtin": b,
-                "custom": c,
-                "delta": delta,
-            })
+        if prev_ts is not None and (ts - prev_ts) > gap_threshold:
+            b = builtin_by_ts.get(prev_ts)
+            c = custom_by_ts.get(prev_ts)
+            if b is not None and c is not None:
+                total += 1
+                delta = abs(b - c)
+                if delta <= tolerance:
+                    matched += 1
+                else:
+                    delta_pct = (delta / max(abs(b), abs(c), 0.001)) * 100
+                    mismatches.append({
+                        "timestamp": prev_ts,
+                        "builtin": b,
+                        "custom": c,
+                        "delta": delta,
+                        "delta_pct": round(delta_pct, 2),
+                    })
+        prev_ts = ts
 
     match_rate = (matched / total * 100) if total > 0 else 0.0
 

@@ -1,8 +1,7 @@
 //@version=6
-// Periodic Volume Profile — per-period developing POC matching built-in.
+// Periodic Volume Profile — completed-period POC lines at period boundaries.
 // Uses request.security_lower_tf(LOWER_TF) for lower-TF bars, builds
-// a volume histogram per period, reports developing POC on each bar
-// and completed-period POCs via line.new for all periods.
+// a volume histogram per period, draws completed-period POCs via line.new.
 //
 // Pine v6: always array.concat() for LTF arrays, never push() in a loop.
 indicator(title="Periodic Volume Profile (Custom)", shorttitle="PVP_Custom", overlay=true, format=format.price, precision=2)
@@ -10,6 +9,20 @@ indicator(title="Periodic Volume Profile (Custom)", shorttitle="PVP_Custom", ove
 period_mult   = input.int(1, "Period Multiplier", group="Period")
 period_unit   = input.string("Day", "Period Unit", options=["Day", "Week", "Month"], group="Period")
 num_rows      = input.int(24, "Number of Rows", group="Rows", minval=1)
+
+max_poc_lines = input.int(200, "Max POC Lines", minval=1, maxval=500, group="Display")
+poc_color     = input.color(#64B5F6, "POC Line Color", group="Display")
+poc_width     = input.int(1, "POC Line Width", minval=1, maxval=5, group="Display")
+poc_style_str = input.string("Solid", "POC Line Style", options=["Solid", "Dashed", "Dotted"], group="Display")
+show_poc      = input.bool(true, "Show POC Lines", group="Display")
+
+f_poc_style(s) =>
+    switch s
+        "Solid"  => line.style_solid
+        "Dashed" => line.style_dashed
+        "Dotted" => line.style_dotted
+
+poc_style = f_poc_style(poc_style_str)
 
 f_lower_tf() =>
     int min = int(timeframe.in_seconds(timeframe.period) / 60)
@@ -38,14 +51,13 @@ f_period_tf() =>
 
 [hs, ls, vs] = request.security_lower_tf(syminfo.tickerid, LOWER_TF, [high, low, volume])
 
-var float[]     period_highs      = na
-var float[]     period_lows       = na
-var float[]     period_volumes    = na
-var int         period_start_bar  = na
-var float       completed_poc     = na
-var line[]      poc_lines         = array.new<line>()
-var bool[]      poc_active        = array.new<bool>()
-var int[]       poc_period        = array.new<int>()
+var float[]   period_highs      = na
+var float[]   period_lows       = na
+var float[]   period_volumes    = na
+var int       period_start_bar  = na
+var line[]    poc_lines         = array.new<line>()
+var bool[]    poc_active        = array.new<bool>()
+var int[]     poc_period        = array.new<int>()
 
 tf_change = ta.change(time(f_period_tf()))
 is_new_period = (not na(period_start_bar) and tf_change != 0) or (not na(period_start_bar) and year_change != 0)
@@ -64,59 +76,64 @@ if array.size(poc_lines) > 0
                     else
                         line.set_x2(l, bar_index)
 
-if is_new_period and not na(period_start_bar) and not na(period_highs) and array.size(period_highs) > 0
-    // Compute POC for completed period
-    float pls_min = array.min(period_lows)
-    float pls_max = array.max(period_highs)
-    float price_range = pls_max - pls_min
-    if price_range > 0
-        float mt = syminfo.mintick
-        float ticks_in_range = price_range / mt
-        int tpr_down  = int(math.floor(ticks_in_range / num_rows))
-        int tpr_up    = int(math.ceil(ticks_in_range / num_rows))
+f_poc(lows, highs, vols, rows) =>
+    float mt = syminfo.mintick
+    float min_p = array.min(lows)
+    float max_p = array.max(highs)
+    float pr = max_p - min_p
+    float result = na
+    if pr > 0
+        float ticks = pr / mt
+        int tpr_down = int(math.floor(ticks / rows))
+        int tpr_up = int(math.ceil(ticks / rows))
         tpr_down := math.max(tpr_down, 1)
-        tpr_up   := math.max(tpr_up, 1)
-        int rows_down = int(math.ceil(ticks_in_range / tpr_down))
-        int rows_up   = int(math.ceil(ticks_in_range / tpr_up))
-        int tpr_used = math.abs(rows_down - num_rows) <= math.abs(rows_up - num_rows) ? tpr_down : tpr_up
-        int total_rows = int(math.ceil(ticks_in_range / tpr_used))
-        float tick_size = tpr_used * mt
-        
-        float[] row_vols = array.new<float>(total_rows, 0.0)
-        int sz = array.size(period_volumes)
+        tpr_up := math.max(tpr_up, 1)
+        int rows_down = int(math.ceil(ticks / tpr_down))
+        int rows_up = int(math.ceil(ticks / tpr_up))
+        int tpr_used = math.abs(rows_down - rows) <= math.abs(rows_up - rows) ? tpr_down : tpr_up
+        int total = int(math.ceil(ticks / tpr_used))
+        float ts = tpr_used * mt
+
+        float[] rv = array.new<float>(total, 0.0)
+        int sz = array.size(vols)
         for i = 0 to sz - 1
-            float bv = array.get(period_volumes, i)
+            float bv = array.get(vols, i)
             if na(bv) or bv <= 0
                 continue
-            float bh = array.get(period_highs, i)
-            float bl = array.get(period_lows, i)
-            float tick_range = (bh - bl) / mt
-            int num_ticks = int(tick_range)
-            num_ticks := math.max(num_ticks, 1)
-            float vol_per_tick = bv / num_ticks
-            for t = 0 to num_ticks
+            float bh = array.get(highs, i)
+            float bl = array.get(lows, i)
+            float tr = (bh - bl) / mt
+            int nt = int(tr)
+            nt := math.max(nt, 1)
+            float vpt = bv / nt
+            for t = 0 to nt
                 float price = bl + t * mt
                 if price > bh
                     continue
-                int r = int(math.floor((price - pls_min) / tick_size))
-                r := math.max(0, math.min(total_rows - 1, r))
-                float cur = array.get(row_vols, r)
-                array.set(row_vols, r, cur + vol_per_tick)
-        float max_vol = array.max(row_vols)
-        if max_vol > 0
-            int poc_row = array.indexof(row_vols, max_vol)
-            if poc_row == -1
-                poc_row := 0
-            float poc_price = pls_min + (poc_row + 0.5) * tick_size
-            completed_poc := poc_price
-            if array.size(poc_lines) >= 30
-                line.delete(array.shift(poc_lines))
-                array.shift(poc_active)
-                array.shift(poc_period)
-            line l = line.new(bar_index[1], poc_price, bar_index, poc_price, xloc=xloc.bar_index, extend=extend.none, color=color.new(#2196F3, 0), style=line.style_solid, width=1)
-            array.push(poc_lines, l)
-            array.push(poc_active, true)
-            array.push(poc_period, period_start_bar)
+                int r = int(math.floor((price - min_p) / ts))
+                r := math.max(0, math.min(total - 1, r))
+                float cur = array.get(rv, r)
+                array.set(rv, r, cur + vpt)
+        float maxv = array.max(rv)
+        if maxv > 0
+            int idx = array.indexof(rv, maxv)
+            if idx == -1
+                idx := 0
+            result := min_p + (idx + 0.5) * ts
+    result
+
+if is_new_period and not na(period_start_bar) and not na(period_highs) and array.size(period_highs) > 0
+    float poc_price = f_poc(period_lows, period_highs, period_volumes, num_rows)
+    if not na(poc_price) and show_poc
+        if array.size(poc_lines) >= max_poc_lines
+            line.delete(array.shift(poc_lines))
+            array.shift(poc_active)
+            array.shift(poc_period)
+        line l = line.new(bar_index[1], poc_price, bar_index, poc_price, xloc=xloc.bar_index, extend=extend.none, color=poc_color, style=poc_style, width=poc_width)
+        array.push(poc_lines, l)
+        array.push(poc_active, true)
+        array.push(poc_period, period_start_bar)
+
 if is_new_period or na(period_start_bar)
     period_start_bar := bar_index
     period_highs := array.copy(hs)
@@ -127,4 +144,4 @@ else
     period_lows    := array.concat(period_lows, ls)
     period_volumes := array.concat(period_volumes, vs)
 
-plot(is_new_period ? 1.0 : 0.0, "PeriodEnd", color=color.new(color.gray, 50))
+plot(is_new_period ? 1.0 : na, "Period Marker", display=display.all)
