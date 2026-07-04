@@ -1,6 +1,6 @@
 ---
 name: pvp
-description: Periodic Volume Profile (PVP) development — Pine Script implementation matching TradingView's built-in Periodic Volume Profile at 100% POC parity. Use when editing or extending the custom PVP indicator.
+description: Periodic Volume Profile (PVP) development — Pine Script implementation matching TradingView's built-in Periodic Volume Profile at 90.9% (1W)/100% (1M) POC parity. Use when editing or extending the custom PVP indicator.
 ---
 
 # Periodic Volume Profile Development
@@ -59,6 +59,23 @@ float poc_price = pls_min + (poc_row + 0.5) * tick_size
 - `poc_row` = index of the highest-volume row in the histogram
 - `tick_size` = `tpr_used * mintick` — the row height (adapted to fit `num_rows` rows)
 - The `+ 0.5` centers the POC at the middle of the winning row
+
+### Volume Distribution (n_levels fix)
+
+Within each lower-TF bar, volume is distributed evenly across all tick levels the
+bar spans.  A bar whose price range covers `nt` ticks (e.g., high-low = $0.05,
+mintick = $0.01 → nt = 5) spans **nt+1** tick levels (the inclusive range
+`[low, low+1tick, ..., high]`):
+
+```pine
+int nt = int((high - low) / mintick)
+int n_levels = nt + 1
+float vpt = bar_volume / n_levels
+```
+
+Each of the `nt + 1` levels receives `vpt` volume.  Without the `+1`, volume is
+over-allocated by `volume / nt / (nt + 1)` per level, inflating the histogram
+and shifting the POC.
 
 ### Line Extension Logic
 
@@ -168,6 +185,27 @@ Gotchas:
 2. **`_primitivesDataById` format:** Can be either a `Map` with `.forEach()` or a plain object with numeric string keys. `Object.keys()` fallback is always used when `.forEach` is absent.
 3. **Rendering cap & sorting:** TV renders max 50 `line.new` objects per indicator in `_primitivesDataById`. ``get_pine_lines(study_filter="...", sort_by="id")`` preserves chronological order and does NOT deduplicate by price. ``sort_by="price"`` (old default) sorts descending by price and deduplicates. PVP parity uses ``sort_by="id"`` — line IDs are sequential, so ``line[k]`` corresponds to the kth oldest visible completed-period POC.
 
+## Parity Results
+
+The custom PVP achieves the following parity against the built-in
+(BATS:GME, 60m, Total volume, 24 rows):
+
+| Period | Match rate | Notes |
+|--------|-----------|-------|
+| 1D     | 39/55 (70.9%) | 16 mismatches, all <0.85% delta. Bar-level LTF data vs tick-level limits precision. |
+| 1W     | 20/22 (90.9%) | 2 mismatches, both <0.2% delta. |
+| 1M     | 6/6 (100.0%)  | Perfect match. Longer periods average out bar-level noise. |
+
+**Key limitation:** `request.security_lower_tf` returns bar-aggregated OHLCV data
+(10m bars on a 60m chart). The built-in PVP has access to tick-level trade data.
+Bar-level volume distribution cannot perfectly replicate tick-level POC for short
+periods. The ~70% 1D ceiling is inherent to the data pipeline.
+
+**Key fix (n_levels):** Volume per tick level = `bar_volume / (nt + 1)`, NOT
+`bar_volume / nt`. The `+1` accounts for the inclusive range `[low, high]`
+spanning `nt + 1` tick levels. Without this, volume is over-allocated by
+`volume / nt / (nt + 1)` per level.
+
 ## Parity Testing
 
 ```python
@@ -175,23 +213,20 @@ from pytvtools.indicator_parity import compare_pvp
 from pytvtools import TV
 
 async with TV() as tv:
-    result = await compare_pvp(tv, "BATS:INTC", "60")
+    # 1D period (default)
+    result = await compare_pvp(tv, "BATS:GME", "60")
     print(f"{result['matched']}/{result['total']} ({result['match_rate']:.1f}%)")
-    # Access the DataFrame for analysis
-    df = result["pvp_df"]
-
-    # Save a detailed text report for debugging
-    result = await compare_pvp(tv, "BATS:INTC", "60", debug_path="pvp_report.txt")
+    
+    # Save a detailed text report
+    result = await compare_pvp(tv, "BATS:GME", "60", debug_path="pvp_report.txt")
 ```
 
 The return dict includes a ``pvp_df`` key with a DataFrame containing columns:
 ``line_id, period_start, period_start_ts, period_end, period_end_ts,
-custom_poc, builtin_poc, delta, match``.
+custom_poc, builtin_poc, delta, delta_pct, match``.
 
-Pass ``debug_path="path.txt"`` to write a human-readable comparison report
-(mirrors the ``pvp_comparison_data.txt`` format).
-
-Target: 100% POC match for completed periods at ±0.01 tolerance.
+Pass ``debug_path="path.txt"`` to write a human-readable comparison report with
+Delta% column.
 
 ### Methodology
 

@@ -3,6 +3,18 @@
 // Uses request.security_lower_tf(LOWER_TF) for lower-TF bars, builds
 // a volume histogram per period, draws completed-period POCs via line.new.
 //
+// Parity vs built-in PVP (BATS:GME, 60m, Total volume, 24 rows):
+//   Period 1D: 39/55 (70.9%) — 16 mismatches, all <0.85% delta.  Bar-level
+//     data (10m LTF) vs built-in tick-level data limits precision.
+//   Period 1W: 20/22 (90.9%) — 2 mismatches, both <0.2% delta.
+//   Period 1M:  6/6  (100%) — perfect match.
+//   See pvp_gme_60.txt, pvp_gme_60_1w.txt, pvp_gme_60_1m.txt for full reports.
+//   Longer periods average out the bar-level noise, improving parity.
+//
+// Key fix (n_levels): volume per tick level = bar_volume / (n_ticks + 1),
+//   NOT bar_volume / n_ticks.  The +1 accounts for the inclusive range
+//   [low, low+1tick, ..., high] which spans nt+1 levels.
+//
 // Pine v6: always array.concat() for LTF arrays, never push() in a loop.
 //
 // Rendering cap: TV renders at most 50 line.new objects per indicator

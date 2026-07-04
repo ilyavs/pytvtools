@@ -310,11 +310,22 @@ mfi_vals = mfi(bars, period=14)
 
 ## Periodic Volume Profile (Pine implementation rules)
 
-The custom PVP at `pine_indicators/pvp.pine` matches built-in at 100% for
-completed-period POCs. Key rules when editing:
+The custom PVP at `pine_indicators/pvp.pine` achieves the following parity
+against the built-in PVP (BATS:GME, 60m, Total volume, 24 rows):
+
+| Period | Match rate | Notes |
+|--------|-----------|-------|
+| 1D     | 39/55 (70.9%) | 16 mismatches, all <0.85% delta. Bar-level data (10m LTF) vs tick-level limits precision. |
+| 1W     | 20/22 (90.9%) | 2 mismatches, both <0.2% delta. |
+| 1M     | 6/6 (100.0%)  | Perfect match. Longer periods average out bar-level noise. |
+
+Key rules when editing:
 
 - **Lower TF data**: `request.security_lower_tf("10")` for 10m bars inside 60m
   chart bars.  The `"10"` string matches TV's built-in behavior.
+- **n_levels fix**: Volume per tick level = `bar_volume / (nt + 1)`, NOT
+  `bar_volume / nt`.  The `+1` accounts for the inclusive range `[low, high]`
+  which spans `nt + 1` tick levels.  Without this, volume is over-allocated.
 - **Pine v6 array limitation**: Never use `for`-loop + `array.push()` with
   `security_lower_tf` arrays — `push()` silently fails.  Always use
   `array.copy()` for initial assignment and `array.concat()` to append.

@@ -107,20 +107,25 @@ The core package is standalone — can be synced to a public repo via `python sc
 
 ## Periodic Volume Profile Parity
 
-The custom Pine implementation at `pine_indicators/pvp.pine` achieves **100% match
-on completed period POCs** against TradingView's built-in Periodic Volume Profile
-(Total volume mode, 24 rows, 1D period on 60m chart).
+The custom Pine implementation at `pine_indicators/pvp.pine` achieves the
+following parity against TradingView's built-in Periodic Volume Profile
+(BATS:GME, 60m, Total volume mode, 24 rows):
+
+| Period | Match rate | Notes |
+|--------|-----------|-------|
+| 1D     | 39/55 (70.9%) | 16 mismatches, all <0.85% delta. Bar-level data (10m LTF) vs tick-level limits precision. |
+| 1W     | 20/22 (90.9%) | 2 mismatches, both <0.2% delta. |
+| 1M     | 6/6 (100.0%)  | Perfect match. Longer periods average out bar-level noise. |
 
 Key findings:
 
 | Aspect | Detail |
 |--------|--------|
-| **Completed POC match** | 25/25 period-end bars match at ±0.01 tolerance |
-| **Developing POC gap** | ~12% mismatch — mid-period values differ due to data pipeline timing, not algorithm |
+| **1D ceiling** | ~70% is the achievable ceiling with `request.security_lower_tf` — built-in has tick-level access |
 | **Lower TF requirement** | `request.security_lower_tf(syminfo.tickerid, "10", [high, low, volume])` — matches TV's built-in behavior for 60m charts |
 | **Pine v6 workaround** | `array.concat()` instead of `for`-loop + `array.push()` — `push()` silently fails with `security_lower_tf` arrays |
 | **POC formula** | `pls_min + (poc_row + 0.5) * tick_size` — center of the highest-volume row |
-| **Volume distribution** | `vol_per_tick = volume / num_ticks` — equal volume per tick, matching built-in |
+| **Volume distribution** | `vol_per_tick = volume / (num_ticks + 1)` — equal volume per tick, +1 for inclusive range |
 
 ### Running parity comparison
 
