@@ -1717,15 +1717,18 @@ function _getMonacoErrors() {
             msgs = "; ".join(r.get("message", str(r)) for r in runtime)
             raise PineCompileError(f"Pine script runtime error:\n{msgs}")
 
-        await asyncio.sleep(2)
-
-        # Find the new entity ID
-        studies_after = await self._get_study_ids()
-        new_ids = [s for s in studies_after if s not in studies_before]
-        entity_id = new_ids[0] if new_ids else (studies_before[-1] if studies_before else None)
+        # Poll for the new entity ID (can take >2s for Pine scripts)
+        entity_id = None
+        for attempt in range(12):
+            await asyncio.sleep(1)
+            studies_after = await self._get_study_ids()
+            new_ids = [s for s in studies_after if s not in studies_before]
+            if new_ids:
+                entity_id = new_ids[0]
+                break
         if entity_id is None:
             raise PineEntityNotFoundError(
-                "No study entity found after Pine compile"
+                "No study entity found after Pine compile (waited 12s)"
             )
 
         # Close the Pine Editor
@@ -2344,8 +2347,25 @@ function _getMonacoErrors() {
     # ------------------------------------------------------------------
 
     async def get_pine_lines(
-        self, study_filter: str | None = None
+        self, study_filter: str | None = None, sort_by: str = "id"
     ) -> list[dict[str, Any]]:
+        """Read horizontal price levels from Pine ``line.new`` objects.
+
+        Parameters
+        ----------
+        study_filter : str, optional
+            Substring to match study name.
+        sort_by : str
+            Sort order for returned lines. ``"id"`` (default) preserves the
+            creation order from ``_primitivesDataById`` (chronological,
+            oldest first).  Pass ``"price"`` for descending-by-price (old
+            ``get_pine_lines`` behavior — deduplicates by price level).
+
+        Returns
+        -------
+        list[dict] with keys: id, price, text
+        """
+        dedup = "true" if sort_by == "price" else "false"
         js = f"""
         (function() {{
             var chart = window.TradingViewApi._activeChartWidgetWV.value()._chartWidget;
@@ -2401,13 +2421,16 @@ function _getMonacoErrors() {
                     var v = item.raw;
                     var y1 = v.y1 != null ? Math.round(v.y1 * 100) / 100 : null;
                     var y2 = v.y2 != null ? Math.round(v.y2 * 100) / 100 : null;
-                    if (y1 != null && y1 === y2 && !seen[y1]) {{
+                    if (y1 != null && y1 === y2) {{
+                        if ({dedup} && seen[y1]) continue;
                         seen[y1] = true;
                         flat.push({{id: item.id, price: y1, text: study.name}});
                     }}
                 }}
             }}
-            flat.sort(function(a, b) {{ return b.price - a.price; }});
+            if (flat.length > 0 && '{sort_by}' === 'price') {{
+                flat.sort(function(a, b) {{ return b.price - a.price; }});
+            }}
             return flat;
         }})()
         """

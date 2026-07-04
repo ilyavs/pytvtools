@@ -205,7 +205,14 @@ async def list_tools() -> list[Tool]:
             description="Horizontal price levels from Pine indicators",
             inputSchema={
                 "type": "object",
-                "properties": {"study_filter": {"type": "string"}},
+                "properties": {
+                    "study_filter": {"type": "string"},
+                    "sort_by": {
+                        "type": "string",
+                        "enum": ["id", "price"],
+                        "description": "\"id\" (chronological) or \"price\" (deduplicated, descending)",
+                    },
+                },
             },
         ),
         Tool(
@@ -253,6 +260,18 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {"source": {"type": "string"}},
+                "required": ["source"],
+            },
+        ),
+        Tool(
+            name="pine_facade_deploy",
+            description="Preferred: save Pine script via REST API + add to chart via _createStudy (bypasses Pine Editor). Returns entity ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "Full Pine Script source (including //@version=6 header)"},
+                    "name": {"type": "string", "description": "Display name (optional, extracted from indicator(title=...) if omitted)"},
+                },
                 "required": ["source"],
             },
         ),
@@ -516,7 +535,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             elif name == "get_quote":
                 result = await tv.get_quote()
             elif name == "get_pine_lines":
-                result = await tv.get_pine_lines(arguments.get("study_filter"))
+                result = await tv.get_pine_lines(
+                    study_filter=arguments.get("study_filter"),
+                    sort_by=arguments.get("sort_by", "id"),
+                )
             elif name == "get_pine_labels":
                 result = await tv.get_pine_labels(
                     study_filter=arguments.get("study_filter"),
@@ -535,6 +557,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             elif name == "pine_set_source":
                 await tv.pine_set_source(arguments["source"])
                 result = {"ok": True}
+            elif name == "pine_facade_deploy":
+                result = {
+                    "entity_id": await tv.pine_facade_deploy(
+                        arguments["source"],
+                        name=arguments.get("name"),
+                    )
+                }
             elif name == "pine_compile":
                 result = await tv.pine_compile()
             elif name == "pine_check_runtime_errors":

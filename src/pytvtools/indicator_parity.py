@@ -17,7 +17,10 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+from datetime import datetime, timezone
 from typing import Any
+
+import pandas as pd
 
 from pytvtools_core.indicators import rsi, sma, ema, macd, mfi, bbands, atr, srsi, supertrend, dss, market_cipher_b
 from pytvtools.tv import TV
@@ -338,25 +341,128 @@ async def compare_indicator(
     )
 
 
+async def _wait_for_indicator_data(
+    tv: TV, entity_id: str, max_retries: int = 20, delay: float = 0.5
+) -> dict | None:
+    """Poll ``get_indicator_data`` until data arrives."""
+    for _ in range(max_retries):
+        data = await tv.get_indicator_data(entity_id)
+        if data and data.get("plots") and data["count"] > 0:
+            return data
+        await asyncio.sleep(delay)
+    return None
+
+
+def _ts_to_date(ts: int) -> str:
+    """Convert unix timestamp to YYYY-MM-DD string."""
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+
+
+def _save_pvp_debug(
+    path: str,
+    symbol: str,
+    timeframe: str,
+    marker_tss: list[int],
+    df: pd.DataFrame,
+) -> None:
+    """Write a detailed PVP comparison report (mirrors pvp_comparison_data.txt format)."""
+    lines: list[str] = []
+    sep = "=" * 100
+    sub = "-" * 100
+
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    lines.append(sep)
+    lines.append("PERIODIC VOLUME PROFILE — POSITIONAL LINE-TO-PERIOD MAPPING")
+    lines.append(sep)
+    lines.append(f"Symbol:        {symbol}")
+    lines.append(f"Timeframe:     {timeframe}")
+    lines.append(f"Generated:     {now_str}")
+    lines.append("")
+
+    markers_shown = min(len(marker_tss), 60)
+    N = len(df)
+    lines.append(f"Period markers:     {len(marker_tss)} ({len(marker_tss)} total)")
+    lines.append(f"Visible POC lines:  {N} (from _primitivesDataById, TV ~50 cap)")
+    lines.append(f"Mapped periods:     {N} (last {N + 1} markers → {N} periods)")
+    lines.append("")
+    lines.append("Method: Each line.new() is created at a Period Marker bar (is_new_period).")
+    lines.append("        The line's POC price represents the COMPLETED period since the")
+    lines.append("        previous marker. Line[k] ↔ period marker[-(N+1)+k].")
+    lines.append("")
+    lines.append(f"Last {markers_shown} markers (oldest to newest):")
+    for i in range(markers_shown):
+        ts = marker_tss[-(markers_shown) + i]
+        lines.append(f"  marker[{i}]: {_ts_to_date(ts)} (ts={ts})")
+    lines.append("")
+
+    lines.append(sub)
+    matched = df["match"].sum()
+    total = len(df)
+    lines.append(f"COMPARISON — Custom POC vs Built-in POC at period end ({int(matched)}/{total} matched)")
+    lines.append(sub)
+    lines.append(f"{'Line ID':<8} {'Period':<28} {'Custom POC':<12} {'Built-in POC':<14} {'Delta':<10} {'Delta%':<10} {'Match':<6}")
+    lines.append(sub)
+
+    for _, row in df.iterrows():
+        period_str = f"{row['period_start']} -> {row['period_end']}"
+        mark = "✓" if row["match"] else "✗"
+        pct_str = f"{row['delta_pct']:<8.4f}%"
+        lines.append(
+            f"{int(row['line_id']):<8} {period_str:<28} {row['custom_poc']:<12.4f} "
+            f"{row['builtin_poc']:<14.4f} {row['delta']:<10.4f} {pct_str:<10} {mark:<5}"
+        )
+
+    lines.append("")
+    lines.append(f"Match rate: {matched / total * 100:.1f}% ({int(matched)}/{total}) within ±0.01 tolerance")
+    lines.append("")
+
+    matched_rows = df[df["match"]]
+    if len(matched_rows) > 0:
+        lines.append("Matched periods:")
+        for _, row in matched_rows.iterrows():
+            lines.append(
+                f"  {row['period_start']} -> {row['period_end']}: "
+                f"custom={row['custom_poc']:.4f} builtin={row['builtin_poc']:.4f} "
+                f"delta={row['delta']:.4f} ({row['delta_pct']:.4f}%)"
+            )
+        lines.append("")
+
+    mismatch_rows = df[~df["match"]]
+    if len(mismatch_rows) > 0:
+        lines.append("Mismatches:")
+        for _, row in mismatch_rows.iterrows():
+            lines.append(
+                f"  {row['period_start']} -> {row['period_end']}: "
+                f"custom={row['custom_poc']:.4f} builtin={row['builtin_poc']:.4f} "
+                f"delta={row['delta']:.4f} ({row['delta_pct']:.4f}%)"
+            )
+        lines.append("")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+    logger.info("PVP debug report saved to %s", path)
+
+
 async def compare_pvp(
     tv: TV,
     symbol: str,
     timeframe: str = "60",
     *,
     tolerance: float = 0.01,
-    gap_threshold: float = 21600,
+    debug_path: str | None = None,
 ) -> dict:
     """Compare custom Pine PVP against built-in Periodic Volume Profile.
 
-    Adds both indicators and compares Plot 0 (developing POC) at completed-period
-    boundaries.  Uses gap detection (threshold=gap_threshold seconds) to find
-    period boundaries — the **last bar before a gap** has accumulated all volume
-    data for the completed period, so its developing POC equals the completed
-    period's POC.  Comparing the first bar after the gap (developing POC of the
-    new period with minimal data) would give misleading results.
-
-    Default gap_threshold (21600s = 6h) works for 60m charts where overnight
-    gaps are ~9h.  Adjust for other timeframes or exchange schedules.
+    Adds both indicators, then uses the **custom PVP's ``Period Marker`` plot** to
+    determine exact period boundaries (no heuristic gap detection). The built-in
+    PVP's ``Developing POC`` at the last bar of each period gives the completed-period
+    POC. The custom PVP's completed-period POCs are read via ``get_pine_lines()``
+    with ``sort_by="id"``, which returns visible ``line.new`` objects in
+    chronological order (oldest visible first). Lines are positionally matched
+    to periods: the N visible lines correspond to the last N completed periods,
+    each bounded by two consecutive period markers.
 
     Parameters
     ----------
@@ -368,12 +474,13 @@ async def compare_pvp(
         Chart timeframe (e.g. ``"60"`` for 60m).
     tolerance : float
         Max absolute price difference for a match (default 0.01).
-    gap_threshold : float
-        Minimum gap in seconds to detect a period boundary (default 21600 = 6h).
+    debug_path : str, optional
+        If provided, saves a detailed comparison text file to this path.
 
     Returns
     -------
-    dict with keys: symbol, timeframe, matched, total, match_rate, mismatches
+    dict with keys: symbol, timeframe, matched, total, match_rate, mismatches,
+    pvp_df (pandas.DataFrame)
     """
     from pytvtools.pine_parity import get_pine_indicator_source
 
@@ -383,87 +490,101 @@ async def compare_pvp(
     await tv.remove_all_indicators()
     await asyncio.sleep(1)
 
-    # Add built-in Periodic Volume Profile
+    # --- Add built-in PVP ---
     eid_builtin = await tv.add_indicator(
         "Periodic Volume Profile", inputs={"volume": "Total"}
     )
     if eid_builtin is None:
         raise RuntimeError("Failed to add built-in Periodic Volume Profile")
 
-    # Wait for built-in data
-    builtin_data = None
-    for _ in range(20):
-        builtin_data = await tv.get_indicator_data(eid_builtin)
-        if builtin_data and builtin_data.get("plots") and builtin_data["count"] > 0:
-            break
-        await asyncio.sleep(0.5)
-
+    builtin_data = await _wait_for_indicator_data(tv, eid_builtin)
     if builtin_data is None:
         raise RuntimeError("No data returned for built-in PVP")
 
-    builtin_by_ts: dict[int, float] = {}
+    builtin_poc_by_ts: dict[int, float] = {}
     for entry in builtin_data["plots"][0]["values"]:
         val = entry.get("value")
         if val is not None:
-            builtin_by_ts[int(entry["timestamp"])] = val
+            builtin_poc_by_ts[int(entry["timestamp"])] = val
 
-    # Add custom Pine PVP
+    # --- Add custom PVP via pine-facade (bypasses Pine Editor issues) ---
+    # Use a unique name each time — save/new with allow_overwrite=true
+    # reuses the cached compiled script when the name matches an existing one.
     source = get_pine_indicator_source("pvp")
-    custom_eid = await tv.add_pine_script(source)
-    await asyncio.sleep(2)
+    custom_script_name = f"PVP_Custom_{int(asyncio.get_event_loop().time())}"
+    custom_eid = await tv.pine_facade_deploy(source, name=custom_script_name)
+    await asyncio.sleep(3)
 
-    # Enable developing POC plot — off by default in the script
-    await tv.set_indicator_inputs(custom_eid, {"show_developing": True})
-    await asyncio.sleep(1)
-
-    # Wait for custom data
-    custom_data = None
-    for _ in range(20):
-        custom_data = await tv.get_indicator_data(custom_eid)
-        if custom_data and custom_data.get("plots") and custom_data["count"] > 0:
-            break
-        await asyncio.sleep(0.5)
-
+    # Wait for custom Period Marker data
+    custom_data = await _wait_for_indicator_data(tv, custom_eid)
     if custom_data is None:
-        raise RuntimeError("No data returned for custom PVP")
+        raise RuntimeError("No data returned for custom PVP (Period Marker)")
 
-    custom_by_ts: dict[int, float] = {}
-    for entry in custom_data["plots"][0]["values"]:
-        val = entry.get("value")
-        if val is not None:
-            custom_by_ts[int(entry["timestamp"])] = val
+    # Period Marker fires 1.0 at the first bar of each new period
+    marker_tss = sorted(set(
+        int(entry["timestamp"])
+        for entry in custom_data["plots"][0]["values"]
+        if entry.get("value") == 1
+    ))
+    if len(marker_tss) < 2:
+        raise RuntimeError(
+            f"Expected at least 2 period markers, got {len(marker_tss)}"
+        )
 
-    # Find completed-period boundaries via gap detection.
-    # The LAST bar before a gap > gap_threshold is the last bar of a completed
-    # period.  At that bar, both indicators have accumulated all volume data
-    # for the period, so their developing POC equals the completed period POC.
-    common = sorted(set(builtin_by_ts) & set(custom_by_ts))
+    # --- Get custom PVP visible POC lines in chronological order ---
+    lines = await tv.get_pine_lines(study_filter="PVP_Custom", sort_by="id")
+    N = len(lines)
+    if N == 0:
+        raise RuntimeError("No visible POC lines found for custom PVP")
+
+    # --- Positional matching ---
+    # A line is created at marker[i+1] (when is_new_period fires).
+    # It represents the period [marker[i], marker[i+1]].
+    # The N visible lines are the N most recent ones, so they map to the
+    # last N+1 markers:  line[k] ↔ marker[-(N+1)+k+1] → period [marker[-(N+1)+k], marker[-(N+1)+k+1]]
+    rows: list[dict] = []
     matched = 0
-    total = 0
-    mismatches: list[dict] = []
 
-    prev_ts = None
-    for ts in common:
-        if prev_ts is not None and (ts - prev_ts) > gap_threshold:
-            b = builtin_by_ts.get(prev_ts)
-            c = custom_by_ts.get(prev_ts)
-            if b is not None and c is not None:
-                total += 1
-                delta = abs(b - c)
-                if delta <= tolerance:
-                    matched += 1
-                else:
-                    delta_pct = (delta / max(abs(b), abs(c), 0.001)) * 100
-                    mismatches.append({
-                        "timestamp": prev_ts,
-                        "builtin": b,
-                        "custom": c,
-                        "delta": delta,
-                        "delta_pct": round(delta_pct, 2),
-                    })
-        prev_ts = ts
+    for k in range(N):
+        period_start_ts = marker_tss[-(N + 1) + k]
+        period_end_ts = marker_tss[-(N + 1) + k + 1]
+        line = lines[k]
+        custom_poc = round(line["price"], 4)
 
+        # Built-in POC at last bar before period end
+        bar_tss = sorted(t for t in builtin_poc_by_ts if t < period_end_ts)
+        if not bar_tss:
+            continue
+        builtin_poc = round(builtin_poc_by_ts[bar_tss[-1]], 4)
+
+        delta = round(abs(builtin_poc - custom_poc), 4)
+        is_match = delta <= tolerance
+        if is_match:
+            matched += 1
+
+        builtin_poc_clean = builtin_poc if builtin_poc and builtin_poc != 0 else 1e-10
+        delta_pct = round(delta / abs(builtin_poc_clean) * 100, 4)
+
+        rows.append({
+            "line_id": int(line["id"]),
+            "period_start": _ts_to_date(period_start_ts),
+            "period_start_ts": period_start_ts,
+            "period_end": _ts_to_date(period_end_ts),
+            "period_end_ts": period_end_ts,
+            "custom_poc": custom_poc,
+            "builtin_poc": builtin_poc,
+            "delta": delta,
+            "delta_pct": delta_pct,
+            "match": is_match,
+        })
+
+    pvp_df = pd.DataFrame(rows)
+    total = len(pvp_df)
     match_rate = (matched / total * 100) if total > 0 else 0.0
+    mismatches = pvp_df[~pvp_df["match"]].to_dict("records")
+
+    if debug_path:
+        _save_pvp_debug(debug_path, symbol, timeframe, marker_tss, pvp_df)
 
     return {
         "symbol": symbol,
@@ -472,4 +593,5 @@ async def compare_pvp(
         "total": total,
         "match_rate": match_rate,
         "mismatches": mismatches,
+        "pvp_df": pvp_df,
     }

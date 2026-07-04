@@ -166,7 +166,7 @@ Gotchas:
 
 1. **Name resolution:** USER; scripts (pine-facade deployed) expose their display name via `title()` method, not `metaInfo()`. The JS in `get_pine_lines` tries `title()` first, falls back to `metaInfo()`.
 2. **`_primitivesDataById` format:** Can be either a `Map` with `.forEach()` or a plain object with numeric string keys. `Object.keys()` fallback is always used when `.forEach` is absent.
-3. **Rendering cap:** TV renders max 50 `line.new` objects per indicator in `_primitivesDataById`. Calling `get_pine_lines()` returns at most 50 deduplicated price levels.
+3. **Rendering cap & sorting:** TV renders max 50 `line.new` objects per indicator in `_primitivesDataById`. ``get_pine_lines(study_filter="...", sort_by="id")`` preserves chronological order and does NOT deduplicate by price. ``sort_by="price"`` (old default) sorts descending by price and deduplicates. PVP parity uses ``sort_by="id"`` — line IDs are sequential, so ``line[k]`` corresponds to the kth oldest visible completed-period POC.
 
 ## Parity Testing
 
@@ -177,29 +177,57 @@ from pytvtools import TV
 async with TV() as tv:
     result = await compare_pvp(tv, "BATS:INTC", "60")
     print(f"{result['matched']}/{result['total']} ({result['match_rate']:.1f}%)")
+    # Access the DataFrame for analysis
+    df = result["pvp_df"]
+
+    # Save a detailed text report for debugging
+    result = await compare_pvp(tv, "BATS:INTC", "60", debug_path="pvp_report.txt")
 ```
+
+The return dict includes a ``pvp_df`` key with a DataFrame containing columns:
+``line_id, period_start, period_start_ts, period_end, period_end_ts,
+custom_poc, builtin_poc, delta, match``.
+
+Pass ``debug_path="path.txt"`` to write a human-readable comparison report
+(mirrors the ``pvp_comparison_data.txt`` format).
 
 Target: 100% POC match for completed periods at ±0.01 tolerance.
 
 ### Methodology
 
-`compare_pvp()` finds completed-period boundaries via **gap detection**:
-gaps >6h (default) between consecutive bars signal daily boundaries.  The
-comparison reads **Plot 0 (developing POC)** from both indicators, but only
-at the **last bar before the gap** — not the first bar after it.
+`compare_pvp()` uses the **custom PVP's ``Period Marker`` plot** (fires ``1.0``
+at each new-period bar) to determine exact period boundaries — no heuristic
+gap detection.
 
-**Why the last bar before the gap?**  Plot 0 is the developing POC, which
-changes every bar as new volume arrives.  At the last bar of a completed
-period, both indicators have accumulated ALL the period's volume data, so
-the developing POC equals the completed period's POC.  The first bar after
-the gap (start of a new period) has only that single bar's volume —
-comparing there gives misleading ~70% match rates.
+The comparison works as follows:
+
+1. **Period markers** from the custom PVP's Plot 0 identify every period boundary.
+2. **Built-in PVP** provides the completed-period POC: read its Plot 0
+   (Developing POC) at the **last bar before each period marker** — that bar
+   has accumulated ALL the period's volume, so the developing POC equals the
+   completed period's POC.
+3. **Custom PVP** provides completed-period POCs via
+   ``get_pine_lines(study_filter="PVP_Custom", sort_by="id")``, which returns
+   visible ``line.new`` objects in chronological creation order (oldest first).
+4. **Positional matching**: line IDs are assigned sequentially at creation time,
+   so ``sort_by="id"`` gives chronological ordering.  The N visible lines
+   correspond to the N most recently completed periods:
+   ``line[k] ↔ period [marker[-(N+1)+k], marker[-(N+1)+k+1]]``.  Periods older
+   than TV's ~50-line rendering cap have no visible line and are excluded.
+
+**Why this approach?**  The Period Marker gives exact boundaries (no threshold
+tuning).  The built-in developing POC at period-end equals the completed-period
+POC.  Positional matching avoids the fragility of price-proximity matching,
+which can fail when two periods have similar POC prices.
 
 **What NOT to do:**
 - Do NOT compare all common timestamps (developing POC on intermediate bars
-  differs ~12% between built-in and custom due to data pipeline timing)
-- Do NOT compare the first bar after a gap (minimal volume → developing POC
-  doesn't represent the completed period)
+  differs between built-in and custom due to data pipeline timing)
+- Do NOT use gap detection — it's a heuristic that fails on multi-session days
+  or markets without overnight gaps
+- Do NOT use price-proximity matching with ``sort_by="price"`` —
+  ``get_pine_lines`` deduplicates by price level, and sorting destroys the
+  chronological ordering needed for positional matching
 
 ## Environment Notes
 

@@ -109,11 +109,10 @@ f_poc(lows, highs, vols, rows) =>
             float tr = (bh - bl) / mt
             int nt = int(tr)
             nt := math.max(nt, 1)
-            float vpt = bv / nt
+            int n_levels = nt + 1
+            float vpt = bv / n_levels
             for t = 0 to nt
                 float price = bl + t * mt
-                if price > bh
-                    continue
                 int r = int(math.floor((price - min_p) / ts))
                 r := math.max(0, math.min(total - 1, r))
                 float cur = array.get(rv, r)

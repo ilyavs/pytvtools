@@ -95,12 +95,13 @@ async with TVData() as d:
 - `list_templates(tab=None)` → `[{name, description}]` — tab: "my templates", "technicals", "financials"
 - `apply_template(name)` — apply a saved indicator template (searches all tabs)
 - `capture_screenshot()` → base64 PNG
-- `get_pine_lines(study_filter=None)` → horizontal price levels (reads `pc.dwglines.get('lines').get(false)._primitivesDataById` via `_activeChartWidgetWV` — the internal getter path, NOT `window.TradingViewApi.chart()`)
+- `get_pine_lines(study_filter=None, sort_by="id")` → horizontal price levels (reads `pc.dwglines.get('lines').get(false)._primitivesDataById` via `_activeChartWidgetWV` — the internal getter path, NOT `window.TradingViewApi.chart()`; `sort_by="id"` preserves chronological order without dedup, `sort_by="price"` sorts descending and deduplicates)
 - `get_pine_labels(study_filter=None, max_labels=50)` → text labels
 - `batch(symbols, timeframes, action, max_bars=500)` — multi-symbol scan (CDP-based, handles rate limits)
 - `get_ohlcv_multi(symbols, interval, bars_count, summary, max_concurrent=10)` — parallel WS fetch, no Chrome needed
 - `pine_set_source(source)` — inject Pine code
 - `pine_compile()` — compile and read errors
+- `pine_facade_deploy(source, name=None)` — **preferred**: save Pine script via REST API + add to chart via `_createStudy` (bypasses Pine Editor). Returns entity ID. Extracts name from `indicator(title=...)` if not provided.
 - `get_pine_source(study_id, entity_id=None)` — fetch Pine Script source of any public indicator
 - `replay_start(date=None)` — enter bar-replay mode (optionally at a specific date)
 - `replay_stop()` — exit replay mode, return to realtime
@@ -324,9 +325,12 @@ completed-period POCs. Key rules when editing:
   anything above 50 is invisible.
 - **POC formula**: `pls_min + (poc_row + 0.5) * tick_size` — center-of-row
 - **Testing**: Use `compare_pvp(tv, symbol, timeframe)` from
-  `pytvtools.indicator_parity`.  It compares at **last-bar-before-gap**
-  (completed-period POC), NOT the first bar after a gap (developing POC
-  with minimal data).  Default gap_threshold=21600s (6h).
+  `pytvtools.indicator_parity`.  It uses the custom PVPs ``Period Marker`` plot
+  (fires ``1.0`` at each new-period bar) to determine exact period boundaries —
+  no heuristic gap detection.  Completed-period POCs from the custom PVP are
+  read via ``get_pine_lines(study_filter="PVP_Custom", sort_by="id")`` and
+  matched **positionally** (line[k] ↔ period marker[-(N+1)+k]) against the
+  built-in's Developing POC at the last bar of each period.
 
 ## Indicator parity (Python vs TradingView)
 
