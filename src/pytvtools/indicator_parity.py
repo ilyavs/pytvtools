@@ -22,7 +22,7 @@ from typing import Any
 
 import pandas as pd
 
-from pytvtools_core.indicators import rsi, sma, ema, macd, mfi, bbands, atr, srsi, supertrend, dss, market_cipher_b
+from pytvtools_core.indicators import rsi, sma, ema, macd, mfi, bbands, atr, srsi, supertrend, dss, market_cipher_b, pvp
 from pytvtools.tv import TV
 
 logger = logging.getLogger(__name__)
@@ -489,6 +489,17 @@ async def compare_pvp(
     await tv.wait_for_chart_ready(timeout=10)
     await tv.remove_all_indicators()
     await asyncio.sleep(1)
+
+    # --- Load max history (scroll to first bar, zoom out) ---
+    await tv._eval("""
+(function() {
+    var ts = window.TradingViewApi.chart().chartWidget().model().timeScale();
+    ts.scrollToFirstBar();
+    for (var i = 0; i < 8; i++) ts.zoom(-2000);
+    return '';
+})()
+""")
+    await asyncio.sleep(5)
 
     # --- Add built-in PVP ---
     eid_builtin = await tv.add_indicator(

@@ -6,7 +6,7 @@ or a list of OHLCV bar dicts with at least a ``"close"`` key.
 Multi-column indicators (MACD, BBands, SRSI, SuperTrend, DSS)
 require dict bars and return ``dict[str, list]``.
 
-Volume-based indicators (MFI, etc.) require dict bars with
+Volume-based indicators (MFI, PVP, etc.) require dict bars with
 ``"high"``, ``"low"``, ``"close"``, ``"volume"`` and raise
 ``ValueError`` if given flat floats.
 
@@ -21,6 +21,7 @@ Usage::
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 
@@ -589,3 +590,168 @@ def atr(
             result[i] = rma
 
     return result
+
+
+_STANDARD_TICKS = [1.0, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.002, 0.001, 0.0005, 0.0002, 0.0001]
+
+
+def _infer_mintick(data: list[dict[str, Any]], max_samples: int = 200) -> float:
+    """Infer minimum tick size from price data.
+
+    Looks at prices in the first *max_samples* bars and finds the
+    smallest non-zero difference between adjacent price levels.
+    The result is rounded to the nearest standard tick size to
+    eliminate sub-tick noise in bar data.
+    """
+    prices: set[float] = set()
+    for b in data[:max_samples]:
+        prices.add(round(float(b["high"]), 10))
+        prices.add(round(float(b["low"]), 10))
+    sorted_prices = sorted(prices)
+    if len(sorted_prices) < 2:
+        return 0.01
+    diffs = [
+        round(sorted_prices[i + 1] - sorted_prices[i], 10)
+        for i in range(len(sorted_prices) - 1)
+        if round(sorted_prices[i + 1] - sorted_prices[i], 10) > 1e-10
+    ]
+    if not diffs:
+        return 0.01
+    min_diff = min(diffs)
+    return min(_STANDARD_TICKS, key=lambda t: abs(t - min_diff))
+
+
+def pvp(
+    data: list[float] | list[dict[str, Any]],
+    period_mult: int = 1,
+    period_unit: str = "Day",
+    num_rows: int = 24,
+    mintick: float | None = None,
+) -> list[float | None]:
+    """Periodic Volume Profile — POC at period boundaries.
+
+    Replicates the exact tick-based row-sizing algorithm from
+    ``pvp.pine``'s ``f_poc()`` function.
+
+    Parameters
+    ----------
+    data : list[dict]
+        OHLCV bars with ``'high'``, ``'low'``, ``'volume'``, ``'timestamp'``.
+    period_mult : int
+        Period multiplier (1, 2, …).
+    period_unit : str
+        ``"Day"`` (default), ``"Week"``, or ``"Month"``.
+    num_rows : int
+        Target number of rows for the volume histogram (default 24).
+    mintick : float, optional
+        Minimum price tick.  Auto-inferred from data if omitted.
+
+    Returns
+    -------
+    ``list[float | None]`` aligned to the input length.  Values are
+    ``None`` for bars that are not the last bar of a period.
+    """
+    if not data:
+        return []
+
+    if not isinstance(data[0], dict):
+        raise ValueError(
+            "pvp() requires OHLCV bar dicts with 'high', 'low', 'volume', "
+            "'timestamp' keys."
+        )
+
+    n = len(data)
+
+    if mintick is None:
+        mintick = _infer_mintick(data)  # type: ignore[arg-type]
+    if mintick <= 0:
+        mintick = 0.01
+
+    period_seconds = {"Day": 86400, "Week": 604800, "Month": 2592000}[period_unit] * period_mult  # type: ignore[literal-required]
+
+    period_groups: dict[int, list[int]] = {}
+    for i in range(n):
+        ts = int(data[i]["timestamp"])  # type: ignore[arg-type]
+        pk = (ts // period_seconds) * period_seconds
+        if pk not in period_groups:
+            period_groups[pk] = []
+        period_groups[pk].append(i)
+
+    result: list[float | None] = [None] * n
+
+    for indices in period_groups.values():
+        if not indices:
+            continue
+
+        period_bars = [data[i] for i in indices]  # type: ignore[arg-type]
+
+        poc_price = _compute_period_poc(
+            [float(b["high"]) for b in period_bars],  # type: ignore[arg-type]
+            [float(b["low"]) for b in period_bars],
+            [float(b.get("volume", 0) or 0) for b in period_bars],
+            num_rows=num_rows,
+            mintick=mintick,
+        )
+        if poc_price is not None:
+            result[indices[-1]] = poc_price
+
+    return result
+
+
+def _compute_period_poc(
+    highs: list[float],
+    lows: list[float],
+    volumes: list[float],
+    num_rows: int,
+    mintick: float,
+) -> float | None:
+    """Compute POC for a single period's bars.
+
+    Replicates ``pvp.pine``'s ``f_poc()`` algorithm exactly.
+    """
+    min_p = min(lows)
+    max_p = max(highs)
+    pr = max_p - min_p
+
+    if pr <= 0 or mintick <= 0:
+        return None
+
+    ticks = pr / mintick
+
+    tpr_down = int(math.floor(ticks / num_rows))
+    tpr_down = max(tpr_down, 1)
+    tpr_up = int(math.ceil(ticks / num_rows))
+    tpr_up = max(tpr_up, 1)
+
+    rows_down = int(math.ceil(ticks / tpr_down))
+    rows_up = int(math.ceil(ticks / tpr_up))
+
+    tpr_used = tpr_down if abs(rows_down - num_rows) <= abs(rows_up - num_rows) else tpr_up
+    total_rows = int(math.ceil(ticks / tpr_used))
+    row_height = tpr_used * mintick
+
+    row_volumes = [0.0] * total_rows
+
+    for i in range(len(lows)):
+        bv = volumes[i]
+        if bv <= 0:
+            continue
+        bh = highs[i]
+        bl = lows[i]
+        tr = (bh - bl) / mintick
+        nt = max(int(tr), 1)
+        n_levels = nt + 1
+        vpt = bv / n_levels
+
+        for t in range(nt + 1):
+            price = bl + t * mintick
+            r = int((price - min_p) / row_height)
+            r = max(0, min(total_rows - 1, r))
+            row_volumes[r] += vpt
+
+    max_vol = max(row_volumes)
+    if max_vol <= 0:
+        return None
+
+    poc_row = row_volumes.index(max_vol)
+    return min_p + (poc_row + 0.5) * row_height

@@ -50,18 +50,20 @@ _REPLAY_API = "window.TradingViewApi._replayApi"
 # outside the Pine Editor (bypasses the compilation cache).
 _PINE_FACADE = "https://pine-facade.tradingview.com/pine-facade"
 
-# Synchronous XHR helper for pine-facade calls (CDP evaluate captures sync
-# results reliably, unlike async fetch with awaitPromise).
-_PINE_XHR = """
-(function(method, url, body) {
-    var xhr = new XMLHttpRequest();
-    xhr.open(method, url, false);
-    xhr.withCredentials = true;
-    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
-    xhr.setRequestHeader('Accept', 'application/json');
-    xhr.setRequestHeader('Referer', 'https://www.tradingview.com/');
-    xhr.send(body || null);
-    return JSON.parse(xhr.responseText);
+# Async fetch helper for pine-facade calls.
+# Uses fetch() instead of synchronous XHR (blocked in modern Chrome).
+_PINE_FETCH = """
+(async function(method, url, body) {
+    var resp = await fetch(url, {
+        method: method,
+        body: body || null,
+        credentials: 'include',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json'
+        }
+    });
+    return await resp.json();
 })
 """
 
@@ -126,6 +128,11 @@ class TV:
             ws_url = make_ws_url(target)
         self._cdp = CdpConnection(ws_url)
         await self._cdp.connect()
+        # Bypass CSP so pine-facade XHR/fetch calls work in headless Chrome
+        try:
+            await self._cdp.send_command("Page.setBypassCSP", {"enabled": True})
+        except Exception:
+            pass
         if self._own_tab:
             # New tab — navigate to TradingView
             await self._eval("window.location.href = 'https://www.tradingview.com/chart/'")
@@ -471,6 +478,28 @@ class TV:
         (function() {{
             var s = {_CHART_API}.symbol();
             return {{ symbol: s }};
+        }})()
+        """)
+
+    async def get_tick_size(self) -> float:
+        """Get the current symbol's minimum tick size.
+
+        Reads from the chart model's min-move formatter.
+
+        Returns
+        -------
+        float
+            Minimum price movement (e.g. 0.01 for most stocks).
+        """
+        return await self._eval(f"""
+        (function() {{
+            try {{
+                var fmt = {_CHART_API}.chartWidget().model().mainSeries()._ignoreMinMoveFormatter;
+                if (!fmt) return 0.01;
+                return fmt._minMove / fmt._priceScale;
+            }} catch(e) {{
+                return 0.01;
+            }}
         }})()
         """)
 
@@ -1988,10 +2017,10 @@ function _getMonacoErrors() {
         """
         result = await self._eval(f"""
             (function() {{
-                var _xhr = {_PINE_XHR};
+                var _xhr = {_PINE_FETCH};
                 return _xhr('GET', '{_PINE_FACADE}/list/?filter=saved', null);
             }})()
-        """)
+        """, await_promise=True)
         if isinstance(result, list):
             return result
         return result.get("result", []) if isinstance(result, dict) else []
@@ -2020,14 +2049,14 @@ function _getMonacoErrors() {
         """
         return await self._eval(f"""
             (function() {{
-                var _xhr = {_PINE_XHR};
+                var _xhr = {_PINE_FETCH};
                 return _xhr(
                     'POST',
                     '{_PINE_FACADE}/save/new?name=' + encodeURIComponent({json.dumps(name)}) + '&allow_overwrite=true',
                     'source=' + encodeURIComponent({json.dumps(source)})
                 );
             }})()
-        """)
+        """, await_promise=True)
 
     async def pine_facade_save_next(
         self, pine_id: str, name: str, source: str
@@ -2047,20 +2076,25 @@ function _getMonacoErrors() {
         """
         return await self._eval(f"""
             (function() {{
-                var _xhr = {_PINE_XHR};
+                var _xhr = {_PINE_FETCH};
                 return _xhr(
                     'POST',
                     '{_PINE_FACADE}/save/next/{pine_id}?name=' + encodeURIComponent({json.dumps(name)}) + '&allow_create_new=false',
                     'source=' + encodeURIComponent({json.dumps(source)})
                 );
             }})()
-        """)
+        """, await_promise=True)
+
 
     async def pine_facade_deploy(self, source: str, name: str | None = None) -> str:
         """Save a Pine script as a **new** entity and add it to the chart.
 
-        Combines :meth:`pine_facade_save_new` and :meth:`add_indicator`
-        to bypass the Pine Editor compilation cache entirely.
+        Uses ``_createStudy`` with the saved script's ``USER;...`` ID,
+        which is more reliable than the Pine Editor path because it avoids
+        access to the internal ``_activeChartWidgetWV`` getter (which
+        triggers the "temporary glitch" popup).  The script is also
+        persisted via :meth:`pine_facade_save_new` so it appears in the
+        user's library.
 
         Parameters
         ----------
@@ -2081,42 +2115,60 @@ function _getMonacoErrors() {
             If the save or add operation fails.
         """
         import re as _re
+        import asyncio
+
         if name is None:
             m = _re.search(r'indicator\s*\(\s*title\s*=\s*"([^"]+)"', source)
             name = m.group(1) if m else "PineScript"
-        # 1. Save as new script (fresh pineId)
+        # 1. Save as new script (gives us a fresh USER; scriptIdPart)
         resp = await self.pine_facade_save_new(name, source)
         if not resp.get("success"):
             raise RuntimeError(
                 f"pine-facade save/new failed: {resp.get('reason', resp)}"
             )
-        # 2. List to discover the new pineId
-        scripts = await self.pine_facade_list()
-        pine_id = None
-        for s in scripts:
-            if s.get("scriptName") == name or s.get("scriptTitle") == name:
-                pine_id = s["scriptIdPart"]
+        script_id = resp.get("result", {}).get("metaInfo", {}).get("scriptIdPart", "")
+        if not script_id:
+            raise RuntimeError(f"No scriptIdPart in save response: {resp}")
+        # 2. Get study IDs BEFORE
+        before_ids = set(await self._get_study_ids())
+        # 3. Fire-and-forget _createStudy (Promise never resolves, but study IS added)
+        await self._eval(f"""
+        (function() {{
+            window.TradingViewApi.chart()._createStudy({{type: 'pine', pineId: {_js_str(script_id)}}});
+        }})()
+        """)
+        # 4. Poll for the study to appear
+        eid = None
+        for _ in range(20):
+            await asyncio.sleep(1)
+            after_ids = await self._get_study_ids()
+            new_ids = [eid for eid in after_ids if eid not in before_ids]
+            if new_ids:
+                eid = new_ids[-1]
                 break
-        if not pine_id:
-            # Fallback: try the last USER; script
-            user_scripts = [s for s in scripts if s.get("scriptIdPart", "").startswith("USER;")]
-            if user_scripts:
-                pine_id = user_scripts[-1]["scriptIdPart"]
-        if not pine_id:
-            raise RuntimeError(
-                f"Could not find pineId for '{name}' after saving"
-            )
-        # 3. Add to chart via _createStudy
-        eid = await self._eval(f"""
-            (function() {{
-                return {_CHART_API}._createStudy({{type: "pine", pineId: {json.dumps(pine_id)}}});
-            }})()
-        """, await_promise=True)
         if not eid:
-            # Sometimes _createStudy succeeds but returns undefined;
-            # look for the newest study
-            studies = await self._get_study_ids()
-            eid = studies[-1] if studies else None
+            # Fallback: Pine Editor path (for headless / unusual environments)
+            logger.warning(
+                "_createStudy did not add study within 20s — falling back to Pine Editor path"
+            )
+            deploy_source = source + f"\n// deploy-{asyncio.get_event_loop().time()}"
+            await self.pine_set_source(deploy_source)
+            await asyncio.sleep(0.5)
+            result = await self.pine_compile()
+            if not result.get("study_added") and not result.get("button_clicked"):
+                raise RuntimeError(
+                    f"Pine Editor add-to-chart failed: {result}"
+                )
+            after_ids = await self._get_study_ids()
+            new_ids = [eid for eid in after_ids if eid not in before_ids]
+            if new_ids:
+                eid = new_ids[-1]
+            elif after_ids:
+                eid = after_ids[-1]
+            else:
+                raise RuntimeError(
+                    "Could not find the added study after Pine Editor compile"
+                )
         if eid:
             self._indicator_ids.add(eid)
         return eid

@@ -25,6 +25,7 @@ from typing import Any
 
 from pytvtools.indicator_parity import compare_indicator as _compare_py_indicator
 from pytvtools.tv import TV
+from pytvtools_core.indicators import pvp as _pvp_py
 
 logger = logging.getLogger(__name__)
 
@@ -246,27 +247,41 @@ async def compare_pine_indicator(
     )
 
 
+def _lower_tf_for(chart_tf: str) -> str:
+    """Match Pine's f_lower_tf() logic."""
+    minutes = {"1": 1, "5": 5, "15": 15, "30": 30, "60": 60, "D": 1440, "W": 10080, "M": 43200}
+    mins = minutes.get(str(chart_tf), int(chart_tf))
+    if mins <= 15: return "1"
+    if mins <= 30: return "5"
+    if mins <= 60: return "10"
+    if mins <= 120: return "15"
+    if mins <= 240: return "30"
+    return "60"
+
+
 async def compare_pine_pvp(
     tv: TV,
-    symbol: str = "BINANCE:BTCUSDT",
-    timeframe: str = "1H",
+    symbol: str = "BATS:GME",
+    timeframe: str = "60",
     *,
     period_mult: int = 1,
     period_unit: str = "Day",
-    va_pct: int = 70,
     num_rows: int = 24,
-    extend_poc: bool = True,
     tolerance: float = 0.01,
 ) -> PineParityReport:
     """Compare custom Pine PVP against Python reference.
 
-    Pure-Python Volume Profile = ground truth.  Reads OHLCV bars via
-    ``get_ohlcv`` (which works in all environments) and computes the
-    reference in Python.  The custom Pine script is added for
-    verification that it compiles; its plot values are optional.
+    Deploys the custom Pine PVP script via the Pine Editor path, reads
+    its ``line.new`` POC output via ``get_pine_lines()``, then compares
+    against the Python ``pvp()`` computed on lower-TF chart data.
 
-    If the environment supports it (TradingView Desktop), the built-in
-    PVP is also added and compared.
+    Plot values from Pine (``_data._items``) are **not** readable in
+    headless Chrome (they live in the Pine Web Worker), so this function
+    reads POC lines from drawing primitives and uses proximity matching
+    instead of position-vs-period-marker alignment.
+
+    Returns a ``PineParityReport`` with the number of Pine POC lines
+    matched to a unique Python period POC within the given tolerance.
     """
     pine_name = "pvp"
 
@@ -275,235 +290,112 @@ async def compare_pine_pvp(
     await tv.wait_for_chart_ready(timeout=10)
     await tv.remove_all_indicators()
 
-    scroll_ago = {60: 120, "1H": 180, "1": 120, "5": 30, "15": 15, "D": 2000, "W": 2000 * 7, "M": 2000 * 30}
-    days_back = scroll_ago.get(timeframe, 180)
-    target_date = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+    tick_size = await tv.get_tick_size()
 
-    ohlcv = await tv.get_ohlcv(count=500, summary=False)
-    if not ohlcv:
-        raise RuntimeError("No OHLCV data returned from chart")
-
-    ref_poc, ref_vah, ref_val = _compute_pvp_python(
-        ohlcv, period_mult=period_mult, period_unit=period_unit,
-        va_pct=va_pct, num_rows=num_rows,
-    )
-
-    period_tf_seconds = _period_unit_to_seconds(period_unit) * period_mult
-    ref_period_map: dict[int, dict[str, float]] = {}
-    for idx, b in enumerate(ohlcv):
-        ts = int(b["timestamp"])
-        pk = (ts // period_tf_seconds) * period_tf_seconds
-        if ref_poc[idx] is not None:
-            ref_period_map.setdefault(pk, {})["poc"] = ref_poc[idx]
-        if ref_vah[idx] is not None:
-            ref_period_map.setdefault(pk, {})["vah"] = ref_vah[idx]
-        if ref_val[idx] is not None:
-            ref_period_map.setdefault(pk, {})["val"] = ref_val[idx]
-
+    # Deploy custom Pine PVP
     source = get_pine_indicator_source(pine_name)
-
     try:
-        await tv.scroll_to_date(target_date)
-        custom_eid = await _pine_add_script(tv, source)
+        custom_eid = await tv.pine_facade_deploy(source, name="PVP_Parity_Test")
     except Exception as exc:
         logger.warning("Skipping custom PVP chart verification: %s", exc)
         if logger.isEnabledFor(logging.DEBUG):
-            logger.debug("Pine add failure details", exc_info=True)
-        custom_eid = None
+            logger.debug("Pine deploy failure details", exc_info=True)
+        return PineParityReport(
+            symbol=symbol, timeframe=timeframe, pine_name=pine_name,
+            total_bars=0, matched=0, mismatches=[], tolerance=tolerance,
+            source="deploy_failed",
+        )
 
+    await asyncio.sleep(5)
+
+    # Read POC lines from Pine drawing primitives
+    lines = await tv.get_pine_lines(study_filter="PVP_Custom", sort_by="id")
+    if not lines:
+        try:
+            await tv.remove_indicator(custom_eid)
+        except Exception:
+            pass
+        return PineParityReport(
+            symbol=symbol, timeframe=timeframe, pine_name=pine_name,
+            total_bars=0, matched=0, mismatches=[], tolerance=tolerance,
+            source="no_lines",
+        )
+
+    pine_pocs = [l["price"] for l in lines]
+
+    # Fetch lower-TF data by switching chart and forcing full history load
+    ltf_tf = _lower_tf_for(timeframe)
+    await tv.set_timeframe(ltf_tf)
+    await asyncio.sleep(2)
+    await tv._eval("""
+    (function() {
+        var m = window.TradingViewApi.chart().chartWidget().model();
+        var ts = m.timeScale();
+        ts.scrollToFirstBar();
+        ts.zoom(-1000);
+    })()
+    """)
+    await asyncio.sleep(5)
+    ltf_bars = await tv.get_ohlcv(count=10000, summary=False)
+
+    # Restore original timeframe
+    await tv.set_timeframe(timeframe)
+    await asyncio.sleep(1)
+
+    # Remove deployed indicator
+    try:
+        await tv.remove_indicator(custom_eid)
+    except Exception:
+        pass
+
+    if not ltf_bars:
+        return PineParityReport(
+            symbol=symbol, timeframe=timeframe, pine_name=pine_name,
+            total_bars=0, matched=0, mismatches=[], tolerance=tolerance,
+            source="no_ltf_data",
+        )
+
+    # Compute Python PVP on LTF data
+    ref_pvp = _pvp_py(
+        ltf_bars, period_mult=period_mult,
+        period_unit=period_unit, num_rows=num_rows,
+        mintick=tick_size,
+    )
+    py_pocs = sorted(v for v in ref_pvp if v is not None)
+
+    if not py_pocs:
+        return PineParityReport(
+            symbol=symbol, timeframe=timeframe, pine_name=pine_name,
+            total_bars=0, matched=0, mismatches=[], tolerance=tolerance,
+            source="no_py_pocs",
+        )
+
+    # Proximity matching: for each Pine POC, find closest unique Python POC
     mismatches: list[PineMismatch] = []
     matched = 0
-    source_str = "python_ref"
+    used = set()
 
-    if custom_eid is not None:
-        custom_data = None
-        for _ in range(15):
-            custom_data = await tv.get_indicator_data(custom_eid)
-            if custom_data and custom_data.get("plots") and custom_data["count"] > 0:
-                break
-            await asyncio.sleep(0.5)
+    for pine_val in pine_pocs:
+        diffs = [(abs(pine_val - pv), i) for i, pv in enumerate(py_pocs)]
+        diffs.sort()
+        best_diff, best_i = diffs[0]
+        if best_diff <= tolerance and best_i not in used:
+            matched += 1
+            used.add(best_i)
         else:
-            custom_data = await tv.get_indicator_data(custom_eid)
+            mismatches.append(PineMismatch(0, py_pocs[best_i] if py_pocs else None, pine_val, best_diff))
 
-        if custom_data and custom_data.get("plots"):
-            custom_plots = custom_data["plots"]
-            custom_poc: dict[int, float] = {}
-            if len(custom_plots) >= 1:
-                for entry in custom_plots[0]["values"]:
-                    if entry.get("value") is not None:
-                        custom_poc[int(entry["timestamp"])] = entry["value"]
-
-            if custom_poc:
-                source_str = "pine_editor"
-                custom_period_map: dict[int, float] = {}
-                for ts, val in custom_poc.items():
-                    pk = (ts // period_tf_seconds) * period_tf_seconds
-                    custom_period_map[pk] = val
-
-                all_periods = sorted(set(ref_period_map) & set(custom_period_map))
-                for pk in all_periods:
-                    bv = ref_period_map[pk]["poc"]
-                    cv = custom_period_map[pk]
-                    delta = abs(bv - cv)
-                    if delta > tolerance:
-                        mismatches.append(PineMismatch(pk, bv, cv, delta))
-                    else:
-                        matched += 1
-
-        if custom_eid:
-            try:
-                await tv.remove_indicator(custom_eid)
-            except Exception:
-                pass
-
-    total_bars = len(ref_period_map)
+    total = len(pine_pocs)
     return PineParityReport(
         symbol=symbol,
         timeframe=timeframe,
         pine_name=pine_name,
-        total_bars=total_bars,
+        total_bars=total,
         matched=matched,
         mismatches=mismatches,
         tolerance=tolerance,
-        source=source_str,
+        source="pine_editor",
     )
-
-
-def _timeframe_to_seconds(tf: str) -> int:
-    """Convert a timeframe string to seconds."""
-    if tf == "D":
-        return 86400
-    if tf == "W":
-        return 604800
-    if tf == "M":
-        return 2592000
-    return int(tf) * 60
-
-
-def _period_unit_to_seconds(unit: str) -> int:
-    """Convert a PVP period unit string to seconds."""
-    if unit == "Minute":
-        return 60
-    if unit in ("Hour", "H"):
-        return 3600
-    if unit in ("Day", "D"):
-        return 86400
-    if unit in ("Week", "W"):
-        return 604800
-    if unit in ("Month", "M"):
-        return 2592000
-    if unit == "Quarter":
-        return 7776000
-    if unit == "Year":
-        return 31536000
-    return 86400
-
-
-def _compute_pvp_python(
-    bars: list[dict],
-    *,
-    period_mult: int = 1,
-    period_unit: str = "Day",
-    va_pct: int = 70,
-    num_rows: int = 24,
-) -> tuple[list[float | None], list[float | None], list[float | None]]:
-    """Compute PVP POC/VAH/VAL reference values from OHLCV bars.
-
-    Returns per-bar arrays of POC, VAH, VAL aligned to the OHLCV input.
-    Values are ``None`` for bars that aren't the last bar of a period
-    (since PVP only emits at period boundaries).
-    """
-    period_tf_seconds = _period_unit_to_seconds(period_unit) * period_mult
-
-    poc: list[float | None] = [None] * len(bars)
-    vah: list[float | None] = [None] * len(bars)
-    val: list[float | None] = [None] * len(bars)
-
-    # Group bars by period
-    periods: dict[int, list[dict]] = {}
-    for b in bars:
-        ts = int(b["timestamp"])
-        pk = (ts // period_tf_seconds) * period_tf_seconds
-        if pk not in periods:
-            periods[pk] = []
-        periods[pk].append(b)
-
-    for pk, period_bars in periods.items():
-        _poc, _vah, _val = _compute_single_profile(period_bars, num_rows, va_pct)
-
-        idxs = [i for i, b in enumerate(bars) if int(b["timestamp"]) // period_tf_seconds * period_tf_seconds == pk]
-        last_bar_idx = idxs[-1] if idxs else -1
-        if _poc is not None and last_bar_idx >= 0:
-            poc[last_bar_idx] = _poc
-            vah[last_bar_idx] = _vah
-            val[last_bar_idx] = _val
-
-    return poc, vah, val
-
-
-def _compute_single_profile(
-    bars: list[dict],
-    num_rows: int,
-    va_pct: int,
-) -> tuple[float | None, float | None, float | None]:
-    """Compute POC, VAH, VAL for a single period's bars using Total volume mode.
-
-    Returns (poc, vah, val) where ``vah`` is the Value Area High and
-    ``val`` is the Value Area Low.  All are ``None`` if the profile
-    is empty.
-    """
-    if not bars:
-        return None, None, None
-
-    min_price = min(b["low"] for b in bars)
-    max_price = max(b["high"] for b in bars)
-    if min_price == max_price:
-        return None, None, None
-
-    row_height = (max_price - min_price) / num_rows
-
-    volume_rows: list[float] = [0.0] * num_rows
-    for b in bars:
-        low_idx = max(0, int((b["low"] - min_price) / row_height))
-        high_idx = min(num_rows - 1, int((b["high"] - min_price) / row_height))
-        vol = b.get("volume", 0) or 0
-        tpv = vol / (high_idx - low_idx + 1) if (high_idx - low_idx + 1) > 0 else vol
-        for ri in range(low_idx, high_idx + 1):
-            volume_rows[ri] += tpv
-
-    total_vol = sum(volume_rows)
-    if total_vol == 0:
-        return None, None, None
-
-    poc_row = max(range(num_rows), key=lambda i: volume_rows[i])
-    poc_price = min_price + (poc_row + 0.5) * row_height
-
-    va_target = total_vol * va_pct / 100.0
-    va_accum = volume_rows[poc_row]
-    vah_row = poc_row
-    val_row = poc_row
-    left = poc_row - 1
-    right = poc_row + 1
-
-    while va_accum < va_target:
-        left_vol = volume_rows[left] if left >= 0 else -1
-        right_vol = volume_rows[right] if right < num_rows else -1
-
-        if left_vol >= right_vol and left >= 0:
-            va_accum += left_vol
-            val_row = left
-            left -= 1
-        elif right < num_rows:
-            va_accum += right_vol
-            vah_row = right
-            right += 1
-        else:
-            break
-
-    vah_price = min_price + (vah_row + 1) * row_height
-    val_price = min_price + val_row * row_height
-
-    return poc_price, vah_price, val_price
 
 
 async def _compare_via_python(

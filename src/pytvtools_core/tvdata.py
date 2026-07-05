@@ -31,8 +31,19 @@ async def _ws_connect(url: str, **kwargs: Any) -> Any:
 
 
 _WS_URL = "wss://data.tradingview.com/socket.io/websocket?from=chart%2F"
-_AUTH_TOKEN = "unauthorized_user_token"
 _TIMEOUT = 30
+
+# Resolutions that reliably work across data sources.
+# "10" and other minute-based resolutions that fail as "custom_resolution"
+# on some feeds (e.g. BATS) fall back to "1" for client-side aggregation.
+_RESOLUTION_FALLBACKS: dict[str, list[str]] = {
+    "1": ["5", "15", "30", "60", "D"],
+    "5": ["15", "30", "60", "D"],
+    "10": ["1", "15", "5", "30", "60", "D"],
+    "15": ["30", "60", "D"],
+    "30": ["60", "D"],
+    "60": ["D"],
+}
 
 _HEARTBEAT_RE = re.compile(r"~m~\d+~m~~h~\d+$")
 _FRAME_RE = re.compile(r"~m~\d+~m~")
@@ -109,64 +120,97 @@ class TVData:
         if self._ws is None:
             raise RuntimeError("Not connected. Use 'async with TVData()'")
 
-        chart_session = _session_id("cs_")
-        bars: list[dict[str, Any]] = []
+        # Try the requested interval, falling back to alternatives if the
+        # server doesn't support it (e.g. "10" fails on some data sources).
+        tried: set[str] = set()
+        fallbacks = [interval] + _RESOLUTION_FALLBACKS.get(interval, [])
 
-        await self._ws.send(_frame({"m": "set_auth_token", "p": [_AUTH_TOKEN]}))
-        await self._ws.send(_frame({"m": "chart_create_session", "p": [chart_session, ""]}))
-
-        symbol_desc = json.dumps({
-            "symbol": symbol,
-            "adjustment": "splits",
-            "backadjustment": "default",
-        })
-        await self._ws.send(_frame({
-            "m": "resolve_symbol",
-            "p": [chart_session, "sds_sym_1", f"={symbol_desc}"],
-        }))
-        await self._ws.send(_frame({
-            "m": "create_series",
-            "p": [chart_session, "sds_1", "s1", "sds_sym_1", interval, bars_count, ""],
-        }))
-
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + _TIMEOUT
-
-        while loop.time() < deadline:
-            raw = await self._ws.recv()
-
-            if isinstance(raw, bytes):
-                raw = raw.decode("utf-8")
-
-            if _HEARTBEAT_RE.match(raw):
-                await self._ws.send(raw)
+        for attempt_interval in fallbacks:
+            if attempt_interval in tried:
                 continue
+            tried.add(attempt_interval)
 
-            for item in _FRAME_RE.split(raw):
-                if not item:
-                    continue
-                # Echo heartbeat fragments that may be concatenated
-                # with data frames in a single recv().
-                if item.startswith("~h~"):
-                    await self._ws.send(item)
-                    continue
-                try:
-                    msg = json.loads(item)
-                except json.JSONDecodeError:
+            chart_session = _session_id("cs_")
+            bars: list[dict[str, Any]] = []
+
+            await self._ws.send(_frame({"m": "chart_create_session", "p": [chart_session, ""]}))
+
+            symbol_desc = json.dumps({
+                "symbol": symbol,
+                "adjustment": "splits",
+                "backadjustment": "default",
+            })
+            await self._ws.send(_frame({
+                "m": "resolve_symbol",
+                "p": [chart_session, "sds_sym_1", f"={symbol_desc}"],
+            }))
+
+            await asyncio.sleep(0.3)
+
+            await self._ws.send(_frame({
+                "m": "create_series",
+                "p": [chart_session, "sds_1", "s1", "sds_sym_1", attempt_interval, bars_count, ""],
+            }))
+
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + _TIMEOUT
+            custom_resolution_error = False
+
+            while loop.time() < deadline:
+                raw = await self._ws.recv()
+
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8")
+
+                if _HEARTBEAT_RE.match(raw):
+                    await self._ws.send(raw)
                     continue
 
-                msg_type = msg.get("m")
-                params = msg.get("p", [])
+                for item in _FRAME_RE.split(raw):
+                    if not item:
+                        continue
+                    if item.startswith("~h~"):
+                        await self._ws.send(item)
+                        continue
+                    try:
+                        msg = json.loads(item)
+                    except json.JSONDecodeError:
+                        continue
 
-                if msg_type in ("du", "timescale_update"):
-                    bars.extend(self._parse_bars(params))
-                elif msg_type == "series_completed":
+                    msg_type = msg.get("m")
+                    params = msg.get("p", [])
+
+                    if msg_type in ("du", "timescale_update"):
+                        bars.extend(self._parse_bars(params))
+                    elif msg_type == "series_completed":
+                        if attempt_interval == "1" and interval != "1" and interval.isdigit():
+                            break
+                        return self._result(bars, symbol, attempt_interval, summary)
+                    elif msg_type == "series_error":
+                        err_str = str(params)
+                        if "custom_resolution" in err_str:
+                            custom_resolution_error = True
+                            break
+                        raise ValueError(f"Series error for {symbol} ({attempt_interval}): {err_str}")
+                    elif msg_type == "symbol_error":
+                        msg_text = str(params)
+                        raise ValueError(f"Symbol error for {symbol}: {msg_text}")
+
+                if custom_resolution_error:
+                    break
+
+            if bars and not custom_resolution_error:
+                # If we fetched 1m bars to aggregate into the target resolution
+                if attempt_interval == "1" and interval != "1" and interval.isdigit():
+                    bars = self._aggregate_1m_to_n(bars, int(interval))
                     return self._result(bars, symbol, interval, summary)
-                elif msg_type == "symbol_error":
-                    msg_text = str(params)
-                    raise ValueError(f"Symbol error for {symbol}: {msg_text}")
+                return self._result(bars, symbol, attempt_interval, summary)
 
-        return self._result(bars, symbol, interval, summary)
+        # All fallbacks exhausted
+        raise ValueError(
+            f"No supported resolution for {symbol}. "
+            f"Tried: {', '.join(tried)}"
+        )
 
     def _parse_bars(self, params: list[Any]) -> list[dict[str, Any]]:
         """Extract OHLCV bars from du/timescale_update message params.
@@ -201,6 +245,32 @@ class TVData:
                     "volume": vals[5] if len(vals) > 5 else 0,
                 })
         return bars
+
+    @staticmethod
+    def _aggregate_1m_to_n(bars_1m: list[dict[str, Any]], n_minutes: int) -> list[dict[str, Any]]:
+        if not bars_1m:
+            return []
+        bucket_s = n_minutes * 60
+        result: list[dict[str, Any]] = []
+        for bar in bars_1m:
+            ts = int(bar["timestamp"])
+            bucket_ts = (ts // bucket_s) * bucket_s
+            if result and result[-1]["timestamp"] == bucket_ts:
+                agg = result[-1]
+                agg["high"] = max(agg["high"], bar["high"])
+                agg["low"] = min(agg["low"], bar["low"])
+                agg["close"] = bar["close"]
+                agg["volume"] += bar["volume"]
+            else:
+                result.append({
+                    "timestamp": bucket_ts,
+                    "open": bar["open"],
+                    "high": bar["high"],
+                    "low": bar["low"],
+                    "close": bar["close"],
+                    "volume": bar["volume"],
+                })
+        return result
 
     async def get_ohlcv_multi(
         self,
