@@ -21,6 +21,8 @@ Usage::
 
 from __future__ import annotations
 
+from datetime import datetime, timezone, timedelta
+
 import math
 from typing import Any
 
@@ -627,6 +629,7 @@ def pvp(
     period_unit: str = "Day",
     num_rows: int = 24,
     mintick: float | None = None,
+    utc_offset: float | None = None,
 ) -> list[float | None]:
     """Periodic Volume Profile — POC at period boundaries.
 
@@ -645,6 +648,10 @@ def pvp(
         Target number of rows for the volume histogram (default 24).
     mintick : float, optional
         Minimum price tick.  Auto-inferred from data if omitted.
+    utc_offset : float, optional
+        Hours from UTC (e.g. -5 for US Eastern Standard Time).
+        Shifts period boundaries to match the exchange timezone.
+        ``None`` (default) uses UTC midnight boundaries.
 
     Returns
     -------
@@ -667,12 +674,41 @@ def pvp(
     if mintick <= 0:
         mintick = 0.01
 
-    period_seconds = {"Day": 86400, "Week": 604800, "Month": 2592000}[period_unit] * period_mult  # type: ignore[literal-required]
+    exchange_midnight_offset = int((-utc_offset) * 3600) if utc_offset is not None else 0
 
-    period_groups: dict[int, list[int]] = {}
+    first_ts = int(data[0]["timestamp"])  # type: ignore[arg-type]
+    ts_div = 1000 if first_ts > 1e11 else 1
+
+    def _period_key(ts_seconds: int) -> tuple[int, int]:
+        shifted_ts = ts_seconds - exchange_midnight_offset
+        dt = datetime.fromtimestamp(shifted_ts, tz=timezone.utc)
+        if period_unit == "Day":
+            base = (shifted_ts // 86400) * 86400
+        elif period_unit == "Week":
+            days_since_monday = dt.weekday()
+            week_start = dt - timedelta(days=days_since_monday)
+            week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+            base = int(week_start.timestamp())
+        elif period_unit == "Month":
+            month_start = dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            base = int(month_start.timestamp())
+        else:
+            base = (shifted_ts // 86400) * 86400
+        if period_mult > 1:
+            periods_since_epoch = base // 86400
+            period_remainder = periods_since_epoch % period_mult
+            base -= period_remainder * 86400
+        period_key = base + exchange_midnight_offset
+        # Year alignment: profiles start fresh at each calendar year boundary,
+        # matching Pine's `year_change = ta.change(time("12M"))` logic.
+        year_start = dt.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        year_key = int(year_start.timestamp()) + exchange_midnight_offset
+        return (year_key, period_key)
+
+    period_groups: dict[tuple[int, int], list[int]] = {}
     for i in range(n):
-        ts = int(data[i]["timestamp"])  # type: ignore[arg-type]
-        pk = (ts // period_seconds) * period_seconds
+        ts = int(data[i]["timestamp"]) // ts_div  # type: ignore[arg-type]
+        pk = _period_key(ts)
         if pk not in period_groups:
             period_groups[pk] = []
         period_groups[pk].append(i)

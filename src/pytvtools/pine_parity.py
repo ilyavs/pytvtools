@@ -20,12 +20,14 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta
 import logging
+import time as _time
 from pathlib import Path
 from typing import Any
 
 from pytvtools.indicator_parity import compare_indicator as _compare_py_indicator
 from pytvtools.tv import TV
 from pytvtools_core.indicators import pvp as _pvp_py
+from pytvtools_core.indicators import _compute_period_poc
 
 logger = logging.getLogger(__name__)
 
@@ -259,6 +261,64 @@ def _lower_tf_for(chart_tf: str) -> str:
     return "60"
 
 
+async def _detect_utc_offset_from_chart(tv: TV) -> float:
+    """Detect the exchange's UTC offset from 60m chart bar timestamps.
+
+    Reads the first chart bar's timestamp and determines the exchange
+    timezone offset.  Assumes the last intra-day gap > 4 hours marks
+    the overnight boundary, and that the first bar of each session is
+    at 09:30 local time.
+    """
+    _CHART_API = "window.TradingViewApi.chart()"
+    timestamps_sec = await tv._eval(f"""
+    (function() {{
+        var items = {_CHART_API}.chartWidget().model().mainSeries().bars()._items;
+        if (!items || items.length === 0) return [];
+        var limit = Math.min(items.length, 100);
+        var start = Math.max(0, items.length - 200);
+        var result = [];
+        for (var i = start; i < start + limit && i < items.length; i++) {{
+            result.push(items[i].value[0]);
+        }}
+        return result;
+    }})()
+    """)
+    if not timestamps_sec:
+        return 0.0
+
+    ts = [int(t) for t in timestamps_sec]
+    gaps = [(ts[i + 1] - ts[i]) for i in range(len(ts) - 1)]
+    large_gaps = [(i, g) for i, g in enumerate(gaps) if g > 14400]
+
+    if not large_gaps:
+        return 0.0
+
+    # First gap > 4 hours is overnight/weekend. The bar AFTER the gap
+    # is the first bar of a trading day. For US equities with extended
+    # hours that first bar is pre-market open at 04:00 local.
+    # For regular-session-only charts it would be 09:30 local.
+    # Detect which by checking if this gap occurs in a 04:00-09:00 window
+    # (extended hours, first bar at 08:00-09:00 UTC = 04:00 local)
+    # vs a 13:00-14:30 window (regular session, first bar at 13:30 UTC = 09:30 local).
+    first_gap_idx = large_gaps[0][0]
+    next_bar_ts = ts[first_gap_idx + 1]
+    hour_utc = (next_bar_ts % 86400) / 3600.0
+
+    if 8.0 <= hour_utc <= 9.0:
+        # Extended hours: first bar is pre-market at 04:00 local
+        offset = 4.0 - hour_utc
+    elif 13.0 <= hour_utc <= 14.5:
+        # Regular session only: first bar is 09:30 local
+        offset = 9.5 - hour_utc
+    else:
+        return 0.0
+
+    if abs(offset) > 14:
+        return 0.0
+
+    return offset
+
+
 async def compare_pine_pvp(
     tv: TV,
     symbol: str = "BATS:GME",
@@ -268,34 +328,71 @@ async def compare_pine_pvp(
     period_unit: str = "Day",
     num_rows: int = 24,
     tolerance: float = 0.01,
-) -> PineParityReport:
+    utc_offset: float | None = None,
+    ) -> PineParityReport:
     """Compare custom Pine PVP against Python reference.
 
     Deploys the custom Pine PVP script via the Pine Editor path, reads
-    its ``line.new`` POC output via ``get_pine_lines()``, then compares
-    against the Python ``pvp()`` computed on lower-TF chart data.
+    its ``line.new`` POC output via ``get_pine_lines()`` and its period
+    markers via ``get_indicator_data()``, then compares on exact time
+    intersection — each completed period's POC is computed on the LTF
+    bars that fall within that period's marker boundaries.  Periods
+    outside Python's LTF data range are skipped.
 
-    Plot values from Pine (``_data._items``) are **not** readable in
-    headless Chrome (they live in the Pine Web Worker), so this function
-    reads POC lines from drawing primitives and uses proximity matching
-    instead of position-vs-period-marker alignment.
+    Falls back to proximity matching when period markers are unavailable.
 
-    Returns a ``PineParityReport`` with the number of Pine POC lines
-    matched to a unique Python period POC within the given tolerance.
+    Parameters
+    ----------
+    utc_offset : float, optional
+        Hours from UTC (e.g. -5 for US Eastern Standard Time).
+        If ``None`` (default), auto-detected from chart bar timestamps.
+
+    Returns a ``PineParityReport`` with the number of overlapping periods
+    matched within the given tolerance.
     """
     pine_name = "pvp"
+    pine_deploy_name = f"PVP_{_time.time_ns()}"
 
     await tv.set_symbol(symbol)
     await tv.set_timeframe(timeframe)
     await tv.wait_for_chart_ready(timeout=10)
     await tv.remove_all_indicators()
 
+    # Load max 60m history so Pine sees as many bars as possible
+    await tv._eval("""
+    (function() {
+        var ts = window.TradingViewApi.chart().chartWidget().model().timeScale();
+        ts.scrollToFirstBar();
+        for (var i = 0; i < 8; i++) ts.zoom(-2000);
+        return '';
+    })()
+    """)
+    await asyncio.sleep(5)
+
     tick_size = await tv.get_tick_size()
 
-    # Deploy custom Pine PVP
+    # Auto-detect UTC offset from 60m bar timestamps if not provided
+    if utc_offset is None:
+        utc_offset = await _detect_utc_offset_from_chart(tv)
+
+    # Deploy custom Pine PVP with matching inputs
     source = get_pine_indicator_source(pine_name)
+    # Override default inputs in the Pine source so the deployed indicator
+    # matches the Python call (TV's set_indicator_inputs is unreliable)
+    source = source.replace(
+        'period_mult   = input.int(1, "Period Multiplier", group="Period")',
+        f'period_mult   = input.int({period_mult}, "Period Multiplier", group="Period")',
+    )
+    source = source.replace(
+        'period_unit   = input.string("Day", "Period Unit", options=["Day", "Week", "Month"], group="Period")',
+        f'period_unit   = input.string("{period_unit}", "Period Unit", options=["Day", "Week", "Month"], group="Period")',
+    )
+    source = source.replace(
+        'num_rows      = input.int(24, "Number of Rows", group="Rows", minval=1)',
+        f'num_rows      = input.int({num_rows}, "Number of Rows", group="Rows", minval=1)',
+    )
     try:
-        custom_eid = await tv.pine_facade_deploy(source, name="PVP_Parity_Test")
+        custom_eid = await tv.pine_facade_deploy(source, name=pine_deploy_name)
     except Exception as exc:
         logger.warning("Skipping custom PVP chart verification: %s", exc)
         if logger.isEnabledFor(logging.DEBUG):
@@ -323,20 +420,34 @@ async def compare_pine_pvp(
 
     pine_pocs = [l["price"] for l in lines]
 
+    # Read period markers from indicator data (timestamps where
+    # is_new_period fired).  These are the START of each period,
+    # bar 0 has no marker (ta.change returns na).
+    indicator_data = await tv.get_indicator_data(custom_eid)
+    markers: list[int] = []
+    if indicator_data and indicator_data.get("plots"):
+        for plot in indicator_data["plots"]:
+            if "Period Marker" in plot.get("name", ""):
+                markers = sorted([
+                    v["timestamp"] for v in plot["values"]
+                    if v.get("value") and abs(v["value"] - 1.0) < 0.5
+                ])
+                break
+
     # Fetch lower-TF data by switching chart and forcing full history load
     ltf_tf = _lower_tf_for(timeframe)
     await tv.set_timeframe(ltf_tf)
-    await asyncio.sleep(2)
+    await asyncio.sleep(3)
     await tv._eval("""
     (function() {
-        var m = window.TradingViewApi.chart().chartWidget().model();
-        var ts = m.timeScale();
+        var ts = window.TradingViewApi.chart().chartWidget().model().timeScale();
         ts.scrollToFirstBar();
-        ts.zoom(-1000);
+        for (var i = 0; i < 8; i++) ts.zoom(-2000);
+        return '';
     })()
     """)
-    await asyncio.sleep(5)
-    ltf_bars = await tv.get_ohlcv(count=10000, summary=False)
+    await asyncio.sleep(8)
+    ltf_bars = await tv.get_ohlcv(count=None, summary=False)
 
     # Restore original timeframe
     await tv.set_timeframe(timeframe)
@@ -355,44 +466,109 @@ async def compare_pine_pvp(
             source="no_ltf_data",
         )
 
-    # Compute Python PVP on LTF data
-    ref_pvp = _pvp_py(
-        ltf_bars, period_mult=period_mult,
-        period_unit=period_unit, num_rows=num_rows,
-        mintick=tick_size,
-    )
-    py_pocs = sorted(v for v in ref_pvp if v is not None)
+    ltf_first = ltf_bars[0]["timestamp"]
+    ltf_last = ltf_bars[-1]["timestamp"]
 
-    if not py_pocs:
+    if not markers:
+        # No period markers read — fallback: old proximity matching.
+        py_pocs = sorted(
+            v for v in _pvp_py(
+                ltf_bars, period_mult=period_mult,
+                period_unit=period_unit, num_rows=num_rows,
+                mintick=tick_size, utc_offset=utc_offset,
+            )
+            if v is not None
+        )
+        n_py = len(py_pocs)
+        n_overlap = min(n_py, len(pine_pocs))
+        pine_to_match = pine_pocs[-n_overlap:] if n_overlap > 0 else []
+        mismatches_fallback: list[PineMismatch] = []
+        matched_fallback = 0
+        used_fallback: set[int] = set()
+        for pine_val in pine_to_match:
+            diffs = [(abs(pine_val - pv), i) for i, pv in enumerate(py_pocs)]
+            diffs.sort()
+            best_diff, best_i = diffs[0]
+            if best_diff <= tolerance and best_i not in used_fallback:
+                matched_fallback += 1
+                used_fallback.add(best_i)
+            else:
+                mismatches_fallback.append(PineMismatch(
+                    0, py_pocs[best_i] if py_pocs else None, pine_val, best_diff,
+                ))
         return PineParityReport(
             symbol=symbol, timeframe=timeframe, pine_name=pine_name,
-            total_bars=0, matched=0, mismatches=[], tolerance=tolerance,
-            source="no_py_pocs",
+            total_bars=n_overlap, matched=matched_fallback,
+            mismatches=mismatches_fallback, tolerance=tolerance,
+            source="pine_editor",
         )
 
-    # Proximity matching: for each Pine POC, find closest unique Python POC
-    mismatches: list[PineMismatch] = []
-    matched = 0
-    used = set()
+    # Time-intersection matching.
+    #
+    # markers[0] fires at the start of period 1 (first time-unit change
+    # after bar 0).  Period k (k=0,1,...,M-1) spans:
+    #   start = markers[k-1] if k > 0 else ltf_bars[0].timestamp
+    #   end   = markers[k]
+    # POC_line[k] (in chronological order) is the POC for period k.
+    #
+    # TV renders at most ~50 line.new per indicator, so only the last
+    # L = len(pine_pocs) periods have visible POC lines.  We align:
+    #   pine_pocs[i]  →  period_idx = M - L + i
+    #   (i=0 → oldest visible period, i=L-1 → most recent)
+    M = len(markers)
+    L = len(pine_pocs)
+    assert M >= 2, f"Need at least 2 markers for one completed period, got {M}"
 
-    for pine_val in pine_pocs:
-        diffs = [(abs(pine_val - pv), i) for i, pv in enumerate(py_pocs)]
-        diffs.sort()
-        best_diff, best_i = diffs[0]
-        if best_diff <= tolerance and best_i not in used:
-            matched += 1
-            used.add(best_i)
+    mismatches_t: list[PineMismatch] = []
+    matched_t = 0
+
+    for i in range(L):
+        period_idx = M - L + i
+        if period_idx < 0:
+            continue
+
+        # Period boundaries from markers
+        p_start = markers[period_idx - 1] if period_idx > 0 else ltf_first
+        p_end = markers[period_idx]
+
+        # Skip periods with no LTF overlap, or where Python's data
+        # starts mid-period (partial data = inaccurate POC)
+        if p_end <= ltf_first or p_start > ltf_last or p_start < ltf_first:
+            continue
+
+        # Filter LTF bars within this exact time window
+        period_bars = [
+            b for b in ltf_bars
+            if p_start <= b["timestamp"] < p_end
+        ]
+        if not period_bars:
+            continue
+
+        # Compute Python POC on this period's LTF bars
+        py_poc = _compute_period_poc(
+            [float(b["high"]) for b in period_bars],
+            [float(b["low"]) for b in period_bars],
+            [float(b.get("volume", 0) or 0) for b in period_bars],
+            num_rows=num_rows,
+            mintick=tick_size,
+        )
+        if py_poc is None:
+            continue
+
+        pine_poc = pine_pocs[i]
+        delta = abs(py_poc - pine_poc)
+        if delta <= tolerance:
+            matched_t += 1
         else:
-            mismatches.append(PineMismatch(0, py_pocs[best_i] if py_pocs else None, pine_val, best_diff))
+            mismatches_t.append(PineMismatch(0, py_poc, pine_poc, delta))
 
-    total = len(pine_pocs)
     return PineParityReport(
         symbol=symbol,
         timeframe=timeframe,
         pine_name=pine_name,
-        total_bars=total,
-        matched=matched,
-        mismatches=mismatches,
+        total_bars=matched_t + len(mismatches_t),
+        matched=matched_t,
+        mismatches=mismatches_t,
         tolerance=tolerance,
         source="pine_editor",
     )
@@ -651,7 +827,7 @@ class PineParityReport:
         return (
             f"Pine parity: {self.pine_name} on {self.symbol} ({self.timeframe})\n"
             f"  Source:      {self.source}\n"
-            f"  Total bars:  {self.total_bars}\n"
+            f"  Overlap:     {self.total_bars} periods\n"
             f"  Matched:     {self.matched} ({self.match_rate:.1f}%)\n"
             f"  Mismatches:  {len(self.mismatches)}\n"
             f"  Tolerance:   \u00b1{self.tolerance}\n"
