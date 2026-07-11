@@ -18,7 +18,9 @@ import logging
 import re
 import secrets
 import string
-from typing import Any
+from typing import Any, TypedDict
+
+from pytvtools_core.types import OHLCVBar
 
 import websockets
 
@@ -84,7 +86,7 @@ class TVData:
                     "Chrome/120.0.0.0 Safari/537.36"
                 ),
             },
-            open_timeout=10,
+            open_timeout=30,
         )
         return self
 
@@ -100,7 +102,7 @@ class TVData:
         bars_count: int = 100,
         *,
         summary: bool = False,
-    ) -> list[dict[str, Any]] | dict[str, Any]:
+    ) -> list[OHLCVBar] | dict[str, Any]:
         """Fetch OHLCV bars for a symbol.
 
         Args:
@@ -131,7 +133,7 @@ class TVData:
             tried.add(attempt_interval)
 
             chart_session = _session_id("cs_")
-            bars: list[dict[str, Any]] = []
+            bars: list[OHLCVBar] = []
 
             await self._ws.send(_frame({"m": "chart_create_session", "p": [chart_session, ""]}))
 
@@ -212,7 +214,7 @@ class TVData:
             f"Tried: {', '.join(tried)}"
         )
 
-    def _parse_bars(self, params: list[Any]) -> list[dict[str, Any]]:
+    def _parse_bars(self, params: list[Any]) -> list[OHLCVBar]:
         """Extract OHLCV bars from du/timescale_update message params.
 
         Format: p = [session_id, { series_id: { s: [{i, v: [ts,o,h,l,c,v]}] } }]
@@ -223,7 +225,7 @@ class TVData:
         if not isinstance(payload, dict):
             return []
 
-        bars: list[dict[str, Any]] = []
+        bars: list[OHLCVBar] = []
         for _name, series_data in payload.items():
             if not isinstance(series_data, dict):
                 continue
@@ -247,11 +249,11 @@ class TVData:
         return bars
 
     @staticmethod
-    def _aggregate_1m_to_n(bars_1m: list[dict[str, Any]], n_minutes: int) -> list[dict[str, Any]]:
+    def _aggregate_1m_to_n(bars_1m: list[OHLCVBar], n_minutes: int) -> list[OHLCVBar]:
         if not bars_1m:
             return []
         bucket_s = n_minutes * 60
-        result: list[dict[str, Any]] = []
+        result: list[OHLCVBar] = []
         for bar in bars_1m:
             ts = int(bar["timestamp"])
             bucket_ts = (ts // bucket_s) * bucket_s
@@ -272,7 +274,7 @@ class TVData:
                 })
         return result
 
-    async def get_ohlcv_multi(
+    async     def get_ohlcv_multi(
         self,
         symbols: list[str],
         interval: str = "1D",
@@ -280,8 +282,9 @@ class TVData:
         *,
         summary: bool = False,
         max_concurrent: int = 5,
-    ) -> dict[str, Any]:
+    ) -> dict[str, list[OHLCVBar] | dict[str, Any]]:
         """Fetch OHLCV for multiple symbols in parallel.
+
 
         Opens one WebSocket connection per symbol, up to ``max_concurrent``
         at a time.  Each connection is independent — errors for one symbol
@@ -298,7 +301,7 @@ class TVData:
 
         Returns
         -------
-        dict[str, Any]
+        dict[str, list[OHLCVBar] | dict[str, Any]]
             ``{symbol: result}`` — each result is the same format as
             :meth:`get_ohlcv`.  On error, ``{symbol: {"error": str}}``.
         """
@@ -312,7 +315,7 @@ class TVData:
         tasks = [_fetch(s) for s in symbols]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        out: dict[str, Any] = {}
+        out: dict[str, list[OHLCVBar] | dict[str, Any]] = {}
         for sym, result in zip(symbols, results):
             if isinstance(result, Exception):
                 out[sym] = {"error": str(result)}
@@ -322,11 +325,11 @@ class TVData:
 
     def _result(
         self,
-        bars: list[dict[str, Any]],
+        bars: list[OHLCVBar],
         symbol: str,
         interval: str,
         summary: bool,
-    ) -> list[dict[str, Any]] | dict[str, Any]:
+    ) -> list[OHLCVBar] | dict[str, Any]:
         bars.sort(key=lambda b: b["timestamp"])
         if summary and bars:
             closes = [b["close"] for b in bars]

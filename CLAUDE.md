@@ -315,9 +315,9 @@ against the built-in PVP (BATS:GME, 60m, Total volume, 24 rows):
 
 | Period | Match rate | Notes |
 |--------|-----------|-------|
-| 1D     | 39/55 (70.9%) | 16 mismatches, all <0.85% delta. Bar-level data (10m LTF) vs tick-level limits precision. |
-| 1W     | 20/22 (90.9%) | 2 mismatches, both <0.2% delta. |
-| 1M     | 6/6 (100.0%)  | Perfect match. Longer periods average out bar-level noise. |
+| 1D     | 39/55 (70.9%) | 16 mismatches, all <0.79% delta. Bar-level data (10m LTF) vs tick-level limits precision. |
+| 1W     | 43/55 (78.2%) | 12 mismatches, all <0.61% delta. |
+| 1M     | 16/17 (94.1%) | 1 mismatch at 5.85% (period where built-in lacked volume data). |
 
 Key rules when editing:
 
@@ -335,13 +335,21 @@ Key rules when editing:
   `_primitivesDataById`. `max_poc_lines` input controls in-Pine storage only;
   anything above 50 is invisible.
 - **POC formula**: `pls_min + (poc_row + 0.5) * tick_size` — center-of-row
-- **Testing**: Use `compare_pvp(tv, symbol, timeframe)` from
-  `pytvtools.indicator_parity`.  It uses the custom PVPs ``Period Marker`` plot
+- **Testing**: Use `compare_pvp(tv, symbol, timeframe, period_unit="Day", period_mult=1)`
+  from `pytvtools.indicator_parity`.  It uses the custom PVPs ``Period Marker`` plot
   (fires ``1.0`` at each new-period bar) to determine exact period boundaries —
-  no heuristic gap detection.  Completed-period POCs from the custom PVP are
-  read via ``get_pine_lines(study_filter="PVP_Custom", sort_by="id")`` and
-  matched **positionally** (line[k] ↔ period marker[-(N+1)+k]) against the
-  built-in's Developing POC at the last bar of each period.
+  no heuristic gap detection.  The built-in PVP's period is synced to match via
+  `inputs={"volume": "Total", "period": period_unit}`, which is critical for
+  cross-period comparison — forgetting this means comparing Day PVP vs Week PVP.
+- **Line-vs-marker alignment**: ``get_pine_lines(study_filter="PVP_Custom", sort_by="id")``
+  can return more visible lines (up to TV's ~55 cap) than completed periods.
+  The alignment formula is:
+  - ``n_periods = min(N, len(marker_tss) - 1)`` — clamp to available periods
+  - ``offset = N - n_periods`` — skip oldest lines beyond marker range
+  - ``line = lines[offset + k]`` aligns line[k] with ``marker[-(n_periods+1)+k]``
+  Do NOT change these formulas without re-verifying all three period units.
+  The off-by-one error between ``N+1`` vs ``N`` and the ``offset`` were hard-won
+  fixes (Week 8→43/55, Month crashed→16/17).
 
 ## Indicator parity (Python vs TradingView)
 

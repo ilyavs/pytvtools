@@ -4,12 +4,13 @@
 // a volume histogram per period, draws completed-period POCs via line.new.
 //
 // Parity vs built-in PVP (BATS:GME, 60m, Total volume, 24 rows):
-//   Period 1D: 39/55 (70.9%) — 16 mismatches, all <0.85% delta.  Bar-level
+//   Period 1D: 39/55 (70.9%) — 16 mismatches, all <0.79% delta.  Bar-level
 //     data (10m LTF) vs built-in tick-level data limits precision.
-//   Period 1W: 20/22 (90.9%) — 2 mismatches, both <0.2% delta.
-//   Period 1M:  6/6  (100%) — perfect match.
-//   See pvp_gme_60.txt, pvp_gme_60_1w.txt, pvp_gme_60_1m.txt for full reports.
-//   Longer periods average out the bar-level noise, improving parity.
+//   Period 1W: 43/55 (78.2%) — 12 mismatches, all <0.61% delta.
+//   Period 1M: 16/17 (94.1%) — 1 mismatch at 5.85% delta.
+//   Longer periods average out bar-level noise, improving the match rate.
+//   Single mismatches in Month are from periods where the built-in PVP
+//   lacked sufficient volume data for a precise developing POC value.
 //
 // Key fix (n_levels): volume per tick level = bar_volume / (n_ticks + 1),
 //   NOT bar_volume / n_ticks.  The +1 accounts for the inclusive range

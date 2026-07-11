@@ -450,6 +450,8 @@ async def compare_pvp(
     symbol: str,
     timeframe: str = "60",
     *,
+    period_unit: str = "Day",
+    period_mult: int = 1,
     tolerance: float = 0.01,
     debug_path: str | None = None,
 ) -> dict:
@@ -472,6 +474,11 @@ async def compare_pvp(
         Symbol to use (e.g. ``"BATS:INTC"``).
     timeframe : str
         Chart timeframe (e.g. ``"60"`` for 60m).
+    period_unit : str
+        Period unit for the built-in PVP (``"Day"``, ``"Week"``, ``"Month"``, etc.).
+        Must match the custom PVP's period for fair comparison. Default ``"Day"``.
+    period_mult : int
+        Period multiplier (default 1).
     tolerance : float
         Max absolute price difference for a match (default 0.01).
     debug_path : str, optional
@@ -481,6 +488,16 @@ async def compare_pvp(
     -------
     dict with keys: symbol, timeframe, matched, total, match_rate, mismatches,
     pvp_df (pandas.DataFrame)
+
+    Notes
+    -----
+    - The built-in PVP period is synced via ``add_indicator(..., inputs=...)``, NOT via
+      ``set_indicator_inputs`` after creation (which risks reading stale pre-change data).
+    - ``get_pine_lines(study_filter="PVP_Custom", sort_by="id")`` can return more visible
+      lines (up to TV's ~55 cap) than completed periods. The alignment formula clamps
+      ``n_periods = min(N, len(marker_tss)-1)`` and applies ``offset = N - n_periods``
+      so that ``line = lines[offset + k]`` aligns with ``marker[-(n_periods+1)+k]``.
+    - Caller must ``remove_all_indicators()`` before use (done inside this function).
     """
     from pytvtools.pine_parity import get_pine_indicator_source
 
@@ -501,9 +518,10 @@ async def compare_pvp(
 """)
     await asyncio.sleep(5)
 
-    # --- Add built-in PVP ---
+    # --- Add built-in PVP, then match its period to the custom PVP ---
     eid_builtin = await tv.add_indicator(
-        "Periodic Volume Profile", inputs={"volume": "Total"}
+        "Periodic Volume Profile",
+        inputs={"volume": "Total", "period": period_unit},
     )
     if eid_builtin is None:
         raise RuntimeError("Failed to add built-in Periodic Volume Profile")
@@ -522,6 +540,14 @@ async def compare_pvp(
     # Use a unique name each time — save/new with allow_overwrite=true
     # reuses the cached compiled script when the name matches an existing one.
     source = get_pine_indicator_source("pvp")
+    source = source.replace(
+        'period_mult   = input.int(1, "Period Multiplier", group="Period")',
+        f'period_mult   = input.int({period_mult}, "Period Multiplier", group="Period")',
+    )
+    source = source.replace(
+        'period_unit   = input.string("Day", "Period Unit", options=["Day", "Week", "Month"], group="Period")',
+        f'period_unit   = input.string("{period_unit}", "Period Unit", options=["Day", "Week", "Month"], group="Period")',
+    )
     custom_script_name = f"PVP_Custom_{int(asyncio.get_event_loop().time())}"
     custom_eid = await tv.pine_facade_deploy(source, name=custom_script_name)
     await asyncio.sleep(3)
@@ -548,18 +574,23 @@ async def compare_pvp(
     if N == 0:
         raise RuntimeError("No visible POC lines found for custom PVP")
 
+    # TV renders at most ~55 line.new per indicator.  Clamp to the number of
+    # completed periods we actually have markers for.
+    n_periods = min(N, len(marker_tss) - 1)
+
     # --- Positional matching ---
     # A line is created at marker[i+1] (when is_new_period fires).
     # It represents the period [marker[i], marker[i+1]].
-    # The N visible lines are the N most recent ones, so they map to the
-    # last N+1 markers:  line[k] ↔ marker[-(N+1)+k+1] → period [marker[-(N+1)+k], marker[-(N+1)+k+1]]
+    # When N > n_periods (extra visible lines beyond available markers),
+    # skip the oldest ones: line[offset + k] ↔ marker[-(n+1)+k].
+    offset = N - n_periods
     rows: list[dict] = []
     matched = 0
 
-    for k in range(N):
-        period_start_ts = marker_tss[-(N + 1) + k]
-        period_end_ts = marker_tss[-(N + 1) + k + 1]
-        line = lines[k]
+    for k in range(n_periods):
+        period_start_ts = marker_tss[-(n_periods + 1) + k]
+        period_end_ts = marker_tss[-(n_periods + 1) + k + 1]
+        line = lines[offset + k]
         custom_poc = round(line["price"], 4)
 
         # Built-in POC at last bar before period end
