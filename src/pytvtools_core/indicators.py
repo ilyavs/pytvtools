@@ -25,17 +25,18 @@ from datetime import datetime, timezone, timedelta
 
 import math
 from typing import Any
+from pytvtools_core.types import OHLCVBar
 
 
-def _prices(data: list[float] | list[dict[str, Any]]) -> list[float]:
+def _prices(data: list[float] | list[OHLCVBar]) -> list[float]:
     if not data:
         return []
     if isinstance(data[0], dict):
-        return [d["close"] for d in data]  # type: ignore[arg-type]
+        return [d["close"] for d in data]  # type: ignore[misc]
     return [float(d) for d in data]  # type: ignore[misc]
 
 
-def sma(data: list[float] | list[dict[str, Any]], period: int = 20) -> list[float | None]:
+def sma(data: list[float] | list[OHLCVBar], period: int = 20) -> list[float | None]:
     """Simple Moving Average.
 
     Returns a list the same length as *data*; the first ``period - 1``
@@ -50,7 +51,7 @@ def sma(data: list[float] | list[dict[str, Any]], period: int = 20) -> list[floa
     return result
 
 
-def ema(data: list[float] | list[dict[str, Any]], period: int = 20) -> list[float | None]:
+def ema(data: list[float] | list[OHLCVBar], period: int = 20) -> list[float | None]:
     """Exponential Moving Average.
 
     Uses ``alpha = 2 / (period + 1)`` with SMA seed.
@@ -70,7 +71,7 @@ def ema(data: list[float] | list[dict[str, Any]], period: int = 20) -> list[floa
     return result
 
 
-def rsi(data: list[float] | list[dict[str, Any]], period: int = 14) -> list[float | None]:
+def rsi(data: list[float] | list[OHLCVBar], period: int = 14) -> list[float | None]:
     """Relative Strength Index (Wilder's smoothing).
 
     Uses ``alpha = 1 / period`` for average gain/loss.
@@ -112,7 +113,7 @@ def rsi(data: list[float] | list[dict[str, Any]], period: int = 14) -> list[floa
     return result
 
 
-def mfi(data: list[float] | list[dict[str, Any]], period: int = 14) -> list[float | None]:
+def mfi(data: list[float] | list[OHLCVBar], period: int = 14) -> list[float | None]:
     """Money Flow Index (SMA-based rolling sum).
 
     Requires OHLCV bar dicts with ``"high"``, ``"low"``, ``"close"``, ``"volume"`` keys.
@@ -124,10 +125,10 @@ def mfi(data: list[float] | list[dict[str, Any]], period: int = 14) -> list[floa
         return []
 
     if isinstance(data[0], dict):
-        highs = [float(d["high"]) for d in data]
-        lows = [float(d["low"]) for d in data]
-        closes = [float(d["close"]) for d in data]
-        volumes = [float(d["volume"]) for d in data]
+        highs = [float(d["high"]) for d in data]  # type: ignore[misc]
+        lows = [float(d["low"]) for d in data]  # type: ignore[misc]
+        closes = [float(d["close"]) for d in data]  # type: ignore[misc]
+        volumes = [float(d["volume"]) for d in data]  # type: ignore[misc]
     else:
         raise ValueError(
             "mfi() requires OHLCV bar dicts with 'high', 'low', 'close', "
@@ -196,7 +197,7 @@ def _auto_tick_size(prices: list[float]) -> float:
 
 
 def macd(
-    data: list[float] | list[dict[str, Any]],
+    data: list[float] | list[OHLCVBar],
     fast: int = 12,
     slow: int = 26,
     signal: int = 9,
@@ -234,7 +235,7 @@ def macd(
 
 
 def bbands(
-    data: list[float] | list[dict[str, Any]],
+    data: list[float] | list[OHLCVBar],
     period: int = 20,
     stddev: float = 2.0,
 ) -> dict[str, list[float | None]]:
@@ -263,7 +264,7 @@ def bbands(
 
 
 def srsi(
-    data: list[float] | list[dict[str, Any]],
+    data: list[float] | list[OHLCVBar],
     period: int = 14,
     smooth_k: int = 3,
     smooth_d: int = 3,
@@ -313,7 +314,7 @@ def sma_series(values: list[float | None], period: int) -> list[float | None]:
 
 
 def supertrend(
-    data: list[float] | list[dict[str, Any]],
+    data: list[float] | list[OHLCVBar],
     period: int = 10,
     multiplier: float = 3.0,
 ) -> dict[str, list[float | None]]:
@@ -331,9 +332,9 @@ def supertrend(
     if not isinstance(data[0], dict):
         raise ValueError("SuperTrend requires OHLCV dict bars")
 
-    highs = [float(d["high"]) for d in data]
-    lows = [float(d["low"]) for d in data]
-    closes = [float(d["close"]) for d in data]
+    highs = [float(d["high"]) for d in data]  # type: ignore[misc]
+    lows = [float(d["low"]) for d in data]  # type: ignore[misc]
+    closes = [float(d["close"]) for d in data]  # type: ignore[misc]
 
     n = len(data)
     up_trend: list[float | None] = [None] * n
@@ -418,7 +419,7 @@ def ema_series(values: list[float | None], period: int) -> list[float | None]:
 
 
 def dss(
-    data: list[float] | list[dict[str, Any]],
+    data: list[float] | list[OHLCVBar],
     pds: int = 10,
     ema_len: int = 9,
     trigger_len: int = 5,
@@ -455,13 +456,13 @@ def dss(
     # Extract OHLCV — if bars have a 'resampled_close' key use that,
     # otherwise read the standard fields (daily OHLCV).
     if "resampled_close" in data[0]:
-        closes = [float(d["resampled_close"]) for d in data]
-        highs = [float(d["resampled_high"]) for d in data]
-        lows = [float(d["resampled_low"]) for d in data]
+        closes = [float(d["resampled_close"]) for d in data]  # type: ignore[misc]
+        highs = [float(d["resampled_high"]) for d in data]  # type: ignore[misc]
+        lows = [float(d["resampled_low"]) for d in data]  # type: ignore[misc]
     else:
-        closes = [float(d["close"]) for d in data]
-        highs = [float(d["high"]) for d in data]
-        lows = [float(d["low"]) for d in data]
+        closes = [float(d["close"]) for d in data]  # type: ignore[misc]
+        highs = [float(d["high"]) for d in data]  # type: ignore[misc]
+        lows = [float(d["low"]) for d in data]  # type: ignore[misc]
 
     # Step 1: stoch(close, high, low, pds)
     stoch1: list[float | None] = [None] * n
@@ -504,7 +505,7 @@ def dss(
 
 
 def market_cipher_b(
-    data: list[float] | list[dict[str, Any]],
+    data: list[float] | list[OHLCVBar],
     channel_length: int = 10,
     average_length: int = 21,
 ) -> dict[str, list[float | None]]:
@@ -523,9 +524,9 @@ def market_cipher_b(
     if not isinstance(data[0], dict):
         raise ValueError("market_cipher_b requires OHLCV dict bars")
 
-    highs = [float(d["high"]) for d in data]
-    lows = [float(d["low"]) for d in data]
-    closes = [float(d["close"]) for d in data]
+    highs = [float(d["high"]) for d in data]  # type: ignore[misc]
+    lows = [float(d["low"]) for d in data]  # type: ignore[misc]
+    closes = [float(d["close"]) for d in data]  # type: ignore[misc]
     n = len(data)
 
     ap = [(highs[i] + lows[i] + closes[i]) / 3.0 for i in range(n)]
@@ -556,7 +557,7 @@ def market_cipher_b(
 
 
 def atr(
-    data: list[float] | list[dict[str, Any]],
+    data: list[float] | list[OHLCVBar],
     period: int = 14,
 ) -> list[float | None]:
     """Average True Range (ATR) with Wilder's smoothing (RMA).
@@ -597,7 +598,7 @@ def atr(
 _STANDARD_TICKS = [1.0, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.002, 0.001, 0.0005, 0.0002, 0.0001]
 
 
-def _infer_mintick(data: list[dict[str, Any]], max_samples: int = 200) -> float:
+def _infer_mintick(data: list[OHLCVBar], max_samples: int = 200) -> float:
     """Infer minimum tick size from price data.
 
     Looks at prices in the first *max_samples* bars and finds the
@@ -624,7 +625,7 @@ def _infer_mintick(data: list[dict[str, Any]], max_samples: int = 200) -> float:
 
 
 def pvp(
-    data: list[float] | list[dict[str, Any]],
+    data: list[float] | list[OHLCVBar],
     period_mult: int = 1,
     period_unit: str = "Day",
     num_rows: int = 24,
