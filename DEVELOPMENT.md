@@ -113,19 +113,20 @@ following parity against TradingView's built-in Periodic Volume Profile
 
 | Period | Match rate | Notes |
 |--------|-----------|-------|
-| 1D     | 39/55 (70.9%) | 16 mismatches, all <0.85% delta. Bar-level data (10m LTF) vs tick-level limits precision. |
-| 1W     | 20/22 (90.9%) | 2 mismatches, both <0.2% delta. |
-| 1M     | 6/6 (100.0%)  | Perfect match. Longer periods average out bar-level noise. |
+| 1D     | 39/55 (70.9%) | 16 mismatches, all <0.79% delta. Bar-level data (10m LTF) vs tick-level limits precision. |
+| 1W     | 43/55 (78.2%) | 12 mismatches, all <0.61% delta. |
+| 1M     | 16/17 (94.1%) | 1 mismatch at 5.85% (period where built-in lacked volume data). |
 
 Key findings:
 
 | Aspect | Detail |
 |--------|--------|
-| **1D ceiling** | ~70% is the achievable ceiling with `request.security_lower_tf` — built-in has tick-level access |
+| **1D ceiling** | ~71% is the achievable ceiling with `request.security_lower_tf` — built-in has tick-level access |
 | **Lower TF requirement** | `request.security_lower_tf(syminfo.tickerid, "10", [high, low, volume])` — matches TV's built-in behavior for 60m charts |
 | **Pine v6 workaround** | `array.concat()` instead of `for`-loop + `array.push()` — `push()` silently fails with `security_lower_tf` arrays |
 | **POC formula** | `pls_min + (poc_row + 0.5) * tick_size` — center of the highest-volume row |
 | **Volume distribution** | `vol_per_tick = volume / (num_ticks + 1)` — equal volume per tick, +1 for inclusive range |
+| **Line-vs-marker alignment** | ``get_pine_lines(study_filter="PVP_Custom", sort_by="id")`` can return more lines (up to TV's ~55 cap) than completed periods. Formula: ``n_periods = min(N, len(marker_tss)-1)``, ``offset = N - n_periods``, ``line = lines[offset + k]`` aligns with ``marker[-(n_periods+1)+k]``. Do NOT change without re-verifying all three period units. |
 
 ### Running parity comparison
 
@@ -134,10 +135,16 @@ from pytvtools import TV, wait_for_cdp
 from pytvtools.indicator_parity import compare_pvp
 
 async with TV() as tv:
-    result = await compare_pvp(tv, "BATS:INTC", "60")
+    result = await compare_pvp(tv, "BATS:INTC", "60", period_unit="Week", period_mult=1)
     print(f"Match: {result['matched']}/{result['total']} ({result['match_rate']:.1f}%)")
 ```
 
 The function adds both the built-in PVP and the custom Pine version, waits for
 data, and compares only on timestamps where both have values (completed-period
 POC bars at 19:00 ET).
+
+**Critical:** The `period_unit` parameter is passed as the built-in PVP's
+``period`` input (default ``"Day"``). Omitting it means comparing Day PVP
+vs the custom's period, which will be wildly different. The built-in's
+period is synced via ``add_indicator``'s ``inputs`` dict, not via
+``set_indicator_inputs`` after creation (which risks reading stale data).

@@ -474,6 +474,11 @@ async def compare_pvp(
         Symbol to use (e.g. ``"BATS:INTC"``).
     timeframe : str
         Chart timeframe (e.g. ``"60"`` for 60m).
+    period_unit : str
+        Period unit for the built-in PVP (``"Day"``, ``"Week"``, ``"Month"``, etc.).
+        Must match the custom PVP's period for fair comparison. Default ``"Day"``.
+    period_mult : int
+        Period multiplier (default 1).
     tolerance : float
         Max absolute price difference for a match (default 0.01).
     debug_path : str, optional
@@ -483,6 +488,16 @@ async def compare_pvp(
     -------
     dict with keys: symbol, timeframe, matched, total, match_rate, mismatches,
     pvp_df (pandas.DataFrame)
+
+    Notes
+    -----
+    - The built-in PVP period is synced via ``add_indicator(..., inputs=...)``, NOT via
+      ``set_indicator_inputs`` after creation (which risks reading stale pre-change data).
+    - ``get_pine_lines(study_filter="PVP_Custom", sort_by="id")`` can return more visible
+      lines (up to TV's ~55 cap) than completed periods. The alignment formula clamps
+      ``n_periods = min(N, len(marker_tss)-1)`` and applies ``offset = N - n_periods``
+      so that ``line = lines[offset + k]`` aligns with ``marker[-(n_periods+1)+k]``.
+    - Caller must ``remove_all_indicators()`` before use (done inside this function).
     """
     from pytvtools.pine_parity import get_pine_indicator_source
 
