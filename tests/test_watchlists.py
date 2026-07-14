@@ -63,7 +63,7 @@ class TestNewWatchlists:
         assert len(INDEX_CFDS) == 9
 
     def test_index_etfs_len(self):
-        assert len(INDEX_ETFS) == 7
+        assert len(INDEX_ETFS) == 6
 
     def test_bonds_len(self):
         assert len(BONDS) == 7
@@ -123,7 +123,7 @@ class TestNewWatchlists:
 
     def test_index_etfs_content(self):
         for sym in ("AMEX:SPY", "NASDAQ:QQQ", "AMEX:IWM", "AMEX:DIA",
-                     "AMEX:VTI", "CBOE:MAGS", "NASDAQ:TLT"):
+                     "AMEX:VTI", "CBOE:MAGS"):
             assert sym in INDEX_ETFS
 
     def test_bonds_content(self):

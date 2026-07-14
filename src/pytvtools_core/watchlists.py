@@ -291,7 +291,6 @@ INDEX_ETFS = Watchlist(
         "AMEX:DIA",
         "AMEX:VTI",
         "CBOE:MAGS",
-        "NASDAQ:TLT",
     ),
 )
 
