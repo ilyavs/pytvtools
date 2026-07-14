@@ -2,7 +2,7 @@
 indicator(title="Multi-Period Close Levels", shorttitle="CL_Levels", overlay=true, format=format.price, precision=2)
 
 delete_on_cross = input.bool(false, "Delete on Cross", group="Line Handling")
-max_lines      = input.int(200, "Max Lines", minval=1, maxval=500, group="Line Handling")
+max_lines       = input.int(200, "Max Lines", minval=1, maxval=500, group="Line Handling")
 
 f_style(s) =>
     switch s
@@ -10,63 +10,172 @@ f_style(s) =>
         "Dashed" => line.style_dashed
         "Dotted" => line.style_dotted
 
-// Period slot defaults: [mult, unit, enabled, color, style, width]
-var slot_defaults = [
-    [1, "D", true,  #64B5F6, "Solid", 1],
-    [1, "W", true,  #FF7043, "Solid", 1],
-    [1, "M", true,  #66BB6A, "Solid", 1],
-    [2, "D", false, #FFA726, "Solid", 1],
-    [5, "D", false, #AB47BC, "Solid", 1],
-]
+mult1  = input.int(1, "Multiplier", group="Period 1")
+unit1  = input.string("D", "Unit", options=["D", "W", "M"], group="Period 1")
+en1    = input.bool(true, "Enabled", group="Period 1")
+col1   = input.color(#64B5F6, "Line Color", group="Period 1")
+sty1   = input.string("Solid", "Line Style", options=["Solid", "Dashed", "Dotted"], group="Period 1")
+w1     = input.int(1, "Line Width", minval=1, maxval=5, group="Period 1")
 
-var slot_lines   = array.new<array<line>>()
-var slot_active  = array.new<array<bool>>()
-var slot_prices  = array.new<array<float>>()
-var slot_colors  = array.new<color>()
-var slot_styles  = array.new<string>()
-var slot_widths  = array.new<int>()
-// string per slot: "1D", "1W", etc.
-var slot_periods = array.new<string>()
+mult2  = input.int(1, "Multiplier", group="Period 2")
+unit2  = input.string("W", "Unit", options=["D", "W", "M"], group="Period 2")
+en2    = input.bool(true, "Enabled", group="Period 2")
+col2   = input.color(#FF7043, "Line Color", group="Period 2")
+sty2   = input.string("Solid", "Line Style", options=["Solid", "Dashed", "Dotted"], group="Period 2")
+w2     = input.int(1, "Line Width", minval=1, maxval=5, group="Period 2")
 
-f_group(i) => "Period " + str.tostring(i + 1)
+mult3  = input.int(1, "Multiplier", group="Period 3")
+unit3  = input.string("M", "Unit", options=["D", "W", "M"], group="Period 3")
+en3    = input.bool(true, "Enabled", group="Period 3")
+col3   = input.color(#66BB6A, "Line Color", group="Period 3")
+sty3   = input.string("Solid", "Line Style", options=["Solid", "Dashed", "Dotted"], group="Period 3")
+w3     = input.int(1, "Line Width", minval=1, maxval=5, group="Period 3")
 
-for i = 0 to 4
-    def = slot_defaults[i]
-    mult  = input.int(def[0], "Multiplier", group=f_group(i))
-    unit  = input.string(def[1], "Unit", options=["D", "W", "M"], group=f_group(i))
-    en    = input.bool(def[2], "Enabled", group=f_group(i))
-    col   = input.color(def[3], "Line Color", group=f_group(i))
-    sty   = input.string(def[4], "Line Style", options=["Solid", "Dashed", "Dotted"], group=f_group(i))
-    w     = input.int(def[5], "Line Width", minval=1, maxval=5, group=f_group(i))
+mult4  = input.int(2, "Multiplier", group="Period 4")
+unit4  = input.string("D", "Unit", options=["D", "W", "M"], group="Period 4")
+en4    = input.bool(false, "Enabled", group="Period 4")
+col4   = input.color(#FFA726, "Line Color", group="Period 4")
+sty4   = input.string("Solid", "Line Style", options=["Solid", "Dashed", "Dotted"], group="Period 4")
+w4     = input.int(1, "Line Width", minval=1, maxval=5, group="Period 4")
 
-    if en
-        string p = mult > 1 ? str.tostring(mult) + unit : unit
-        array.push(slot_periods, p)
-        array.push(slot_lines, array.new<line>())
-        array.push(slot_active, array.new<bool>())
-        array.push(slot_prices, array.new<float>())
-        array.push(slot_colors, col)
-        array.push(slot_styles, sty)
-        array.push(slot_widths, w)
+mult5  = input.int(5, "Multiplier", group="Period 5")
+unit5  = input.string("D", "Unit", options=["D", "W", "M"], group="Period 5")
+en5    = input.bool(false, "Enabled", group="Period 5")
+col5   = input.color(#AB47BC, "Line Color", group="Period 5")
+sty5   = input.string("Solid", "Line Style", options=["Solid", "Dashed", "Dotted"], group="Period 5")
+w5     = input.int(1, "Line Width", minval=1, maxval=5, group="Period 5")
 
-// --- Line extension and cross-check ---
-for s = 0 to array.size(slot_lines) - 1
-    lines  = array.get(slot_lines, s)
-    active = array.get(slot_active, s)
-    prices = array.get(slot_prices, s)
+var line[]   s1_lines  = array.new<line>()
+var bool[]   s1_active = array.new<bool>()
+var float[]  s1_prices = array.new<float>()
+var string   s1_period = na
+var color    s1_color  = na
+var string   s1_style  = na
+var int      s1_width  = na
+
+var line[]   s2_lines  = array.new<line>()
+var bool[]   s2_active = array.new<bool>()
+var float[]  s2_prices = array.new<float>()
+var string   s2_period = na
+var color    s2_color  = na
+var string   s2_style  = na
+var int      s2_width  = na
+
+var line[]   s3_lines  = array.new<line>()
+var bool[]   s3_active = array.new<bool>()
+var float[]  s3_prices = array.new<float>()
+var string   s3_period = na
+var color    s3_color  = na
+var string   s3_style  = na
+var int      s3_width  = na
+
+var line[]   s4_lines  = array.new<line>()
+var bool[]   s4_active = array.new<bool>()
+var float[]  s4_prices = array.new<float>()
+var string   s4_period = na
+var color    s4_color  = na
+var string   s4_style  = na
+var int      s4_width  = na
+
+var line[]   s5_lines  = array.new<line>()
+var bool[]   s5_active = array.new<bool>()
+var float[]  s5_prices = array.new<float>()
+var string   s5_period = na
+var color    s5_color  = na
+var string   s5_style  = na
+var int      s5_width  = na
+
+var string[] slot_periods = array.new<string>()
+var int[]    slot_active_count = array.new<int>()
+
+if barstate.isfirst
+    if en1
+        s1_period := mult1 > 1 ? str.tostring(mult1) + unit1 : unit1
+        s1_color  := col1
+        s1_style  := sty1
+        s1_width  := w1
+        array.push(slot_periods, s1_period)
+        array.push(slot_active_count, 1)
+    if en2
+        s2_period := mult2 > 1 ? str.tostring(mult2) + unit2 : unit2
+        s2_color  := col2
+        s2_style  := sty2
+        s2_width  := w2
+        array.push(slot_periods, s2_period)
+        array.push(slot_active_count, 2)
+    if en3
+        s3_period := mult3 > 1 ? str.tostring(mult3) + unit3 : unit3
+        s3_color  := col3
+        s3_style  := sty3
+        s3_width  := w3
+        array.push(slot_periods, s3_period)
+        array.push(slot_active_count, 3)
+    if en4
+        s4_period := mult4 > 1 ? str.tostring(mult4) + unit4 : unit4
+        s4_color  := col4
+        s4_style  := sty4
+        s4_width  := w4
+        array.push(slot_periods, s4_period)
+        array.push(slot_active_count, 4)
+    if en5
+        s5_period := mult5 > 1 ? str.tostring(mult5) + unit5 : unit5
+        s5_color  := col5
+        s5_style  := sty5
+        s5_width  := w5
+        array.push(slot_periods, s5_period)
+        array.push(slot_active_count, 5)
+
+f_check_lines(lines, active, prices) =>
     for j = 0 to array.size(lines) - 1
         if array.get(active, j)
-            float px = array.get(prices, j)
+            px = array.get(prices, j)
             if not na(px) and not na(high) and not na(low)
                 if high >= px and low <= px
                     if delete_on_cross
-                        line l = array.get(lines, j)
-                        line.delete(l)
+                        line.delete(array.get(lines, j))
                         array.set(active, j, false)
                     else
-                        line l = array.get(lines, j)
-                        line.set_x2(l, bar_index[1])
+                        line.set_x2(array.get(lines, j), bar_index[1])
                         array.set(active, j, false)
                 else
-                    line l = array.get(lines, j)
-                    line.set_x2(l, bar_index)
+                    line.set_x2(array.get(lines, j), bar_index)
+
+for s = 0 to array.size(slot_periods) - 1
+    slot = array.get(slot_active_count, s)
+    if slot == 1
+        f_check_lines(s1_lines, s1_active, s1_prices)
+    if slot == 2
+        f_check_lines(s2_lines, s2_active, s2_prices)
+    if slot == 3
+        f_check_lines(s3_lines, s3_active, s3_prices)
+    if slot == 4
+        f_check_lines(s4_lines, s4_active, s4_prices)
+    if slot == 5
+        f_check_lines(s5_lines, s5_active, s5_prices)
+
+f_new_line(lines, active, prices, price, color, style, width) =>
+    while array.size(lines) >= max_lines
+        line.delete(array.shift(lines))
+        array.shift(active)
+        array.shift(prices)
+    l = line.new(bar_index, price, bar_index, price, xloc=xloc.bar_index, extend=extend.none, color=color, style=f_style(style), width=width)
+    array.push(lines, l)
+    array.push(active, true)
+    array.push(prices, price)
+
+for s = 0 to array.size(slot_periods) - 1
+    period_str = array.get(slot_periods, s)
+    close_val = request.security(syminfo.tickerid, period_str, close)
+    if ta.change(time(period_str)) != 0 and not na(close_val[1])
+        px = close_val[1]
+        slot = array.get(slot_active_count, s)
+        if slot == 1
+            f_new_line(s1_lines, s1_active, s1_prices, px, s1_color, s1_style, s1_width)
+        if slot == 2
+            f_new_line(s2_lines, s2_active, s2_prices, px, s2_color, s2_style, s2_width)
+        if slot == 3
+            f_new_line(s3_lines, s3_active, s3_prices, px, s3_color, s3_style, s3_width)
+        if slot == 4
+            f_new_line(s4_lines, s4_active, s4_prices, px, s4_color, s4_style, s4_width)
+        if slot == 5
+            f_new_line(s5_lines, s5_active, s5_prices, px, s5_color, s5_style, s5_width)
