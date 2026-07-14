@@ -86,7 +86,7 @@ var string   s5_style  = na
 var int      s5_width  = na
 
 var string[] slot_periods = array.new<string>()
-var int[]    slot_active_count = array.new<int>()
+var int[]    slot_ordinal = array.new<int>()
 
 if barstate.isfirst
     if en1
@@ -95,35 +95,35 @@ if barstate.isfirst
         s1_style  := sty1
         s1_width  := w1
         array.push(slot_periods, s1_period)
-        array.push(slot_active_count, 1)
+        array.push(slot_ordinal, 1)
     if en2
         s2_period := mult2 > 1 ? str.tostring(mult2) + unit2 : unit2
         s2_color  := col2
         s2_style  := sty2
         s2_width  := w2
         array.push(slot_periods, s2_period)
-        array.push(slot_active_count, 2)
+        array.push(slot_ordinal, 2)
     if en3
         s3_period := mult3 > 1 ? str.tostring(mult3) + unit3 : unit3
         s3_color  := col3
         s3_style  := sty3
         s3_width  := w3
         array.push(slot_periods, s3_period)
-        array.push(slot_active_count, 3)
+        array.push(slot_ordinal, 3)
     if en4
         s4_period := mult4 > 1 ? str.tostring(mult4) + unit4 : unit4
         s4_color  := col4
         s4_style  := sty4
         s4_width  := w4
         array.push(slot_periods, s4_period)
-        array.push(slot_active_count, 4)
+        array.push(slot_ordinal, 4)
     if en5
         s5_period := mult5 > 1 ? str.tostring(mult5) + unit5 : unit5
         s5_color  := col5
         s5_style  := sty5
         s5_width  := w5
         array.push(slot_periods, s5_period)
-        array.push(slot_active_count, 5)
+        array.push(slot_ordinal, 5)
 
 f_check_lines(lines, active, prices) =>
     for j = 0 to array.size(lines) - 1
@@ -141,7 +141,7 @@ f_check_lines(lines, active, prices) =>
                     line.set_x2(array.get(lines, j), bar_index)
 
 for s = 0 to array.size(slot_periods) - 1
-    slot = array.get(slot_active_count, s)
+    slot = array.get(slot_ordinal, s)
     if slot == 1
         f_check_lines(s1_lines, s1_active, s1_prices)
     if slot == 2
@@ -153,12 +153,12 @@ for s = 0 to array.size(slot_periods) - 1
     if slot == 5
         f_check_lines(s5_lines, s5_active, s5_prices)
 
-f_new_line(lines, active, prices, price, color, style, width) =>
+f_new_line(lines, active, prices, price, line_color, style, width) =>
     while array.size(lines) >= max_lines
         line.delete(array.shift(lines))
         array.shift(active)
         array.shift(prices)
-    l = line.new(bar_index, price, bar_index, price, xloc=xloc.bar_index, extend=extend.none, color=color, style=f_style(style), width=width)
+    l = line.new(bar_index[1], price, bar_index[1], price, xloc=xloc.bar_index, extend=extend.none, color=line_color, style=f_style(style), width=width)
     array.push(lines, l)
     array.push(active, true)
     array.push(prices, price)
@@ -168,7 +168,7 @@ for s = 0 to array.size(slot_periods) - 1
     close_val = request.security(syminfo.tickerid, period_str, close)
     if ta.change(time(period_str)) != 0 and not na(close_val[1])
         px = close_val[1]
-        slot = array.get(slot_active_count, s)
+        slot = array.get(slot_ordinal, s)
         if slot == 1
             f_new_line(s1_lines, s1_active, s1_prices, px, s1_color, s1_style, s1_width)
         if slot == 2
