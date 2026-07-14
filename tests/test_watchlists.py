@@ -83,3 +83,60 @@ class TestNewWatchlists:
     def test_get_watchlist_unknown(self):
         with pytest.raises(KeyError):
             get_watchlist("NONEXISTENT")
+
+    def test_pink_list_watchlists_complete(self):
+        """PINK_LIST_WATCHLISTS should contain all 7 new lists."""
+        from pytvtools_core.watchlists import PINK_LIST_WATCHLISTS
+        expected = {"METALS_MINERS", "INDEX_FUTURES", "INDEX_CFDS",
+                     "INDEX_ETFS", "BONDS", "OIL", "URANIUM_STRATEGIC"}
+        assert set(PINK_LIST_WATCHLISTS) == expected
+
+    def test_watchlists_includes_legacy(self):
+        assert "SPDR_SECTORS" in WATCHLISTS
+        assert "SPDR_INDUSTRIES" in WATCHLISTS
+        assert "SPDR_ALL" in WATCHLISTS
+        assert "CRYPTO" in WATCHLISTS
+
+    def test_metals_miners_spot_symbols(self):
+        for sym in ("OANDA:XAUUSD", "TVC:GOLD", "OANDA:XAGUSD", "OANDA:XCUUSD"):
+            assert sym in METALS_MINERS
+
+    def test_metals_miners_miners(self):
+        for sym in ("NEM", "FCX", "SCCO", "RIO", "BHP", "VALE"):
+            assert sym in METALS_MINERS
+
+    def test_index_futures_content(self):
+        assert "CME_MINI:ES1!" in INDEX_FUTURES
+        assert "CME_MINI:NQ1!" in INDEX_FUTURES
+        assert "CBOT_MINI:YM1!" in INDEX_FUTURES
+        assert "CME_MINI:RTY1!" in INDEX_FUTURES
+        assert "EUREX:FDAX1!" in INDEX_FUTURES
+        assert "EUREX:FESX1!" in INDEX_FUTURES
+
+    def test_index_cfds_content(self):
+        assert "SPCFD:SPX" in INDEX_CFDS
+        assert "TVC:NDQ" in INDEX_CFDS
+        assert "TVC:DJI" in INDEX_CFDS
+        assert "TVC:RUT" in INDEX_CFDS
+        assert "TVC:DAX" in INDEX_CFDS
+        assert "TVC:NI225" in INDEX_CFDS
+
+    def test_index_etfs_content(self):
+        for sym in ("AMEX:SPY", "NASDAQ:QQQ", "AMEX:IWM", "AMEX:DIA",
+                     "AMEX:VTI", "CBOE:MAGS", "NASDAQ:TLT"):
+            assert sym in INDEX_ETFS
+
+    def test_bonds_content(self):
+        for sym in ("TVC:US10Y", "TVC:US02Y", "TVC:US03M", "TVC:TNX",
+                     "CBOT:TN1!", "CBOT:ZT1!", "NASDAQ:TLT"):
+            assert sym in BONDS
+
+    def test_oil_content(self):
+        for sym in ("TVC:USOIL", "TVC:UKOIL", "NYMEX:CL1!",
+                     "OANDA:WTICOUSD", "OANDA:BCOUSD"):
+            assert sym in OIL
+
+    def test_uranium_strategic_content(self):
+        for sym in ("AMEX:URA", "AMEX:URNM", "AMEX:REMX", "AMEX:SLX",
+                     "CCJ", "DNN", "NXE", "LYC"):
+            assert sym in URANIUM_STRATEGIC
