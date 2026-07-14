@@ -7,7 +7,7 @@ from pytvtools_core.types import OHLCVBar
 __all__ = [
     "rsi", "sma", "ema", "macd", "mfi", "bbands", "atr", "srsi", "supertrend", "dss",
     "market_cipher_b",
-    "Watchlist",
+    "Watchlist", "get_sp500", "SPDR_SECTORS", "SPDR_INDUSTRIES", "SPDR_ALL", "CRYPTO",
     "TVData",
     "MarketDataCache",
     "OHLCVBar",

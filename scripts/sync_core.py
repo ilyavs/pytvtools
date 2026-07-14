@@ -22,6 +22,18 @@ CORE_TESTS = [
     REPO_ROOT / "tests" / "test_tvdata.py",
 ]
 
+CORE_NOTEBOOKS = [
+    REPO_ROOT / "notebooks" / "cache_refresh.py",
+    REPO_ROOT / "notebooks" / "stress_test_tvdata_limits.py",
+]
+
+CORE_JOBS = [
+    REPO_ROOT / "jobs" / "cache_refresh_on_demand.json",
+    REPO_ROOT / "jobs" / "cache_refresh_daily.json",
+    REPO_ROOT / "jobs" / "cache_refresh_weekly.json",
+    REPO_ROOT / "jobs" / "cache_refresh_monthly.json",
+]
+
 
 def main() -> None:
     args = sys.argv[1:]
@@ -48,6 +60,22 @@ def main() -> None:
         if t.exists():
             shutil.copy2(t, target_tests / t.name)
             print(f"Copied {t.name}")
+
+    # Copy notebooks
+    target_notebooks = target / "notebooks"
+    target_notebooks.mkdir(parents=True, exist_ok=True)
+    for n in CORE_NOTEBOOKS:
+        if n.exists():
+            shutil.copy2(n, target_notebooks / n.name)
+            print(f"Copied {n.name}")
+
+    # Copy jobs
+    target_jobs = target / "jobs"
+    target_jobs.mkdir(parents=True, exist_ok=True)
+    for j in CORE_JOBS:
+        if j.exists():
+            shutil.copy2(j, target_jobs / j.name)
+            print(f"Copied {j.name}")
 
     # Generate pyproject.toml in target root
     core_pp = target / "pyproject.toml"

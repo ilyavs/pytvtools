@@ -12,9 +12,18 @@ Two packages in one repo:
 | Package | Directory | Publishes as | Contents |
 |---------|-----------|-------------|----------|
 | **CDP** | `src/pytvtools/` | `pytvtools` | `cdp.py`, `chrome.py`, `tv.py`, `collector.py`, `indicator_parity.py`, `pine_parity.py`, `mcp_server.py` |
-| **Core** | `src/pytvtools_core/` | `pytvtools-core` | `indicators.py`, `watchlists.py`, `tvdata.py` |
+| **Core** | `src/pytvtools_core/` | `pytvtools-core` | `indicators.py`, `watchlists.py`, `tvdata.py`, `cache.py` |
 
-The core package is standalone — synced to [pytvtools-core](https://github.com/ilyavs/pytvtools-core) via `python scripts/sync_core.py`. **Never push to the core repo without explicit user approval.** During development, install both editable:
+The core package is standalone — synced to [pytvtools-core](https://github.com/ilyavs/pytvtools-core) via `python scripts/sync_core.py`. The Databricks workspace has a git folder at `/Users/sl.ilya1987@gmail.com/pytvtools-core/` linked to that repo — workspace jobs pull source from there.
+
+**Push workflow (never upload files manually):**
+
+    python scripts/sync_core.py ../pytvtools-core --commit "msg"
+    git -C ../pytvtools-core push
+
+This copies `src/pytvtools_core/`, `tests/`, and `notebooks/` to the standalone repo, commits, then push to GitHub. The Databricks workspace auto-syncs from the git folder.
+
+During local development, install both editable:
 
     pip install -e src\pytvtools_core
     pip install -e .
@@ -362,6 +371,26 @@ async with TV() as tv:
     print(report.summary())
     # Total bars, match rate, mismatches
 ```
+
+## Market data cache — new watchlists
+
+Seven new watchlists were added to `src/pytvtools_core/watchlists.py` alongside the existing SPDR and S&P 500 lists:
+
+| Python constant | Symbols | What |
+|---|---|---|
+| METALS_MINERS | 31 | Precious metals spot, gold/silver/copper ETFs, individual miners (NEM, FCX, etc.) |
+| INDEX_FUTURES | 6 | CME E-mini (ES, NQ, YM, RTY) + Eurex (FDAX1!, FESX1!) |
+| INDEX_CFDS | 9 | SPCFD:SPX, TVC:NDQ/DJI/RUT, TVC global indices (DAX, UKX, PX1, NI225, HSI) |
+| INDEX_ETFS | 7 | SPY, QQQ, IWM, DIA, VTI, MAGS, TLT |
+| BONDS | 7 | US10Y/US02Y/US03M yields, TN1!/ZT1! futures, TLT ETF |
+| OIL | 5 | WTI/Brent benchmarks, CL1! future, OANDA WTICOUSD/BCOUSD |
+| URANIUM_STRATEGIC | 22 | URA/URNM/REMX ETFs, uranium miners, rare earth, steel |
+
+**Registry** — use `get_watchlist("METALS_MINERS")` or loop over `WATCHLISTS` dict.  `PINK_LIST_WATCHLISTS` groups the 7 pink-list-derived lists.
+
+**Notebook** — `notebooks/cache_refresh.py` now accepts a `watchlist` parameter.  Pass e.g. `"BONDS"` to refresh that list, `"SP500"` for S&P 500 (default).
+
+**Validation** — all 87 symbols validated against TV's live WebSocket API (3 bars each, 1D).
 
 ## Remote tunnel
 

@@ -34,6 +34,8 @@ if TYPE_CHECKING:
     from pytvtools_core.types import OHLCVBar
 from urllib.parse import quote, unquote
 
+import websockets
+
 try:
     from pytvtools_core.tvdata import TVData
 except ImportError:
@@ -193,6 +195,26 @@ class MarketDataCache:
         self._store_bars(symbol, timeframe, new_bars, bool(latest_ts))
         return {"fetched": len(all_bars), "inserted": len(new_bars)}
 
+    async def refresh_all(
+        self,
+        symbol: str,
+        timeframe: str,
+        chunk_size: int = 4000,
+    ) -> dict[str, int]:
+        """Fetch ALL available bars via pagination, replacing existing data.
+
+        Drops existing cache for (symbol, timeframe), fetches full history
+        via ``get_ohlcv_all``, then does a fresh INSERT.
+
+        Returns ``{"fetched": N, "inserted": M}``.
+        """
+        self._delete_bars(symbol, timeframe)
+        all_bars = await self._fetch_all(symbol, timeframe, chunk_size)
+        if not all_bars:
+            return {"fetched": 0, "inserted": 0}
+        self._store_bars(symbol, timeframe, all_bars, incremental=False)
+        return {"fetched": len(all_bars), "inserted": len(all_bars)}
+
     async def refresh_multi(
         self,
         symbols: list[str],
@@ -209,6 +231,31 @@ class MarketDataCache:
         async def _one(sym: str, tf: str) -> tuple[str, str, dict[str, int]]:
             async with sem:
                 return sym, tf, await self.refresh(sym, tf, bars_count)
+
+        results: dict[str, dict[str, dict[str, int]]] = {}
+        for sym, tf, res in await asyncio.gather(*[_one(s, tf) for s in symbols for tf in timeframes]):
+            results.setdefault(sym, {})[tf] = res
+        return results
+
+    async def refresh_multi_all(
+        self,
+        symbols: list[str],
+        timeframes: list[str],
+        chunk_size: int = 4000,
+        max_concurrent: int = 3,
+    ) -> dict[str, dict[str, dict[str, int]]]:
+        """Refresh multiple symbol/timeframe combos with full pagination.
+
+        Uses ``refresh_all`` for each pair.  Best for initial backfill;
+        switch to ``refresh_multi`` for incremental updates.
+
+        Returns ``{symbol: {timeframe: {"fetched": N, "inserted": M}}}``.
+        """
+        sem = asyncio.Semaphore(max_concurrent)
+
+        async def _one(sym: str, tf: str) -> tuple[str, str, dict[str, int]]:
+            async with sem:
+                return sym, tf, await self.refresh_all(sym, tf, chunk_size)
 
         results: dict[str, dict[str, dict[str, int]]] = {}
         for sym, tf, res in await asyncio.gather(*[_one(s, tf) for s in symbols for tf in timeframes]):
@@ -236,13 +283,50 @@ class MarketDataCache:
         async with TVData() as tv:
             return await tv.get_ohlcv(symbol, timeframe, count)
 
+    @staticmethod
+    async def _fetch_all(symbol: str, timeframe: str, chunk_size: int) -> list[OHLCVBar]:
+        for attempt in range(3):
+            try:
+                async with TVData() as tv:
+                    return await tv.get_ohlcv_all(symbol, timeframe, chunk_size)
+            except websockets.ConnectionClosed:
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(2 ** attempt)
+        return []
+
     # ------------------------------------------------------------------
     #  Latest timestamp
     # ------------------------------------------------------------------
 
+    def _delete_bars(self, symbol: str, timeframe: str) -> None:
+        if self._mode == "local":
+            path = self._cache_dir / _safe_name(symbol) / f"{timeframe}.parquet"
+            if path.exists():
+                path.unlink()
+        else:
+            sql = f"DELETE FROM {_TABLE} WHERE symbol = '{symbol}' AND timeframe = '{timeframe}'"
+            if self._mode == "spark":
+                self._spark.sql(sql)
+            else:
+                from databricks.sdk.service.sql import Statement
+                self._ws.statement_execution.execute_statement(
+                    sql, warehouse_id=self._warehouse_id, wait_timeout="30s"
+                ).result()
+
     def _latest_timestamp(self, symbol: str, timeframe: str) -> float | None:
         rows = self.latest_timestamps([symbol], [timeframe])
         return rows[0]["latest"] if rows else None
+
+    def _count_bars(self, symbol: str, timeframe: str) -> int:
+        if self._mode == "local":
+            path = self._cache_dir / _safe_name(symbol) / f"{timeframe}.parquet"
+            if not path.exists():
+                return 0
+            return self._pq.read_table(str(path), columns=["timestamp"]).num_rows
+        sql = f"SELECT count(*) AS n FROM {_TABLE} WHERE symbol = '{symbol}' AND timeframe = '{timeframe}'"
+        rows = self._exec_uc(sql)
+        return rows[0]["n"] if rows else 0
 
     # -- local --
 
