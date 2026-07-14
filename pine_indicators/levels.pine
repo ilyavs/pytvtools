@@ -1,0 +1,50 @@
+//@version=6
+indicator(title="Multi-Period Close Levels", shorttitle="CL_Levels", overlay=true, format=format.price, precision=2)
+
+delete_on_cross = input.bool(false, "Delete on Cross", group="Line Handling")
+max_lines      = input.int(200, "Max Lines", minval=1, maxval=500, group="Line Handling")
+
+f_style(s) =>
+    switch s
+        "Solid"  => line.style_solid
+        "Dashed" => line.style_dashed
+        "Dotted" => line.style_dotted
+
+// Period slot defaults: [mult, unit, enabled, color, style, width]
+var slot_defaults = [
+    [1, "D", true,  #64B5F6, "Solid", 1],
+    [1, "W", true,  #FF7043, "Solid", 1],
+    [1, "M", true,  #66BB6A, "Solid", 1],
+    [2, "D", false, #FFA726, "Solid", 1],
+    [5, "D", false, #AB47BC, "Solid", 1],
+]
+
+var slot_lines   = array.new<array<line>>()
+var slot_active  = array.new<array<bool>>()
+var slot_prices  = array.new<array<float>>()
+var slot_colors  = array.new<color>()
+var slot_styles  = array.new<string>()
+var slot_widths  = array.new<int>()
+// string per slot: "1D", "1W", etc.
+var slot_periods = array.new<string>()
+
+f_group(i) => "Period " + str.tostring(i + 1)
+
+for i = 0 to 4
+    def = slot_defaults[i]
+    mult  = input.int(def[0], "Multiplier", group=f_group(i))
+    unit  = input.string(def[1], "Unit", options=["D", "W", "M"], group=f_group(i))
+    en    = input.bool(def[2], "Enabled", group=f_group(i))
+    col   = input.color(def[3], "Line Color", group=f_group(i))
+    sty   = input.string(def[4], "Line Style", options=["Solid", "Dashed", "Dotted"], group=f_group(i))
+    w     = input.int(def[5], "Line Width", minval=1, maxval=5, group=f_group(i))
+
+    if en
+        string p = mult > 1 ? str.tostring(mult) + unit : unit
+        array.push(slot_periods, p)
+        array.push(slot_lines, array.new<line>())
+        array.push(slot_active, array.new<bool>())
+        array.push(slot_prices, array.new<float>())
+        array.push(slot_colors, col)
+        array.push(slot_styles, sty)
+        array.push(slot_widths, w)
