@@ -48,3 +48,25 @@ for i = 0 to 4
         array.push(slot_colors, col)
         array.push(slot_styles, sty)
         array.push(slot_widths, w)
+
+// --- Line extension and cross-check ---
+for s = 0 to array.size(slot_lines) - 1
+    lines  = array.get(slot_lines, s)
+    active = array.get(slot_active, s)
+    prices = array.get(slot_prices, s)
+    for j = 0 to array.size(lines) - 1
+        if array.get(active, j)
+            float px = array.get(prices, j)
+            if not na(px) and not na(high) and not na(low)
+                if high >= px and low <= px
+                    if delete_on_cross
+                        line l = array.get(lines, j)
+                        line.delete(l)
+                        array.set(active, j, false)
+                    else
+                        line l = array.get(lines, j)
+                        line.set_x2(l, bar_index[1])
+                        array.set(active, j, false)
+                else
+                    line l = array.get(lines, j)
+                    line.set_x2(l, bar_index)
