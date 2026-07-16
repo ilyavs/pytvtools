@@ -27,6 +27,8 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import logging
+import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -35,6 +37,8 @@ if TYPE_CHECKING:
 from urllib.parse import quote, unquote
 
 import websockets
+
+logger = logging.getLogger(__name__)
 
 try:
     from pytvtools_core.tvdata import TVData
@@ -203,16 +207,27 @@ class MarketDataCache:
     ) -> dict[str, int]:
         """Fetch ALL available bars via pagination, replacing existing data.
 
-        Drops existing cache for (symbol, timeframe), fetches full history
-        via ``get_ohlcv_all``, then does a fresh INSERT.
+        Fetches first, THEN deletes old data — so if the job is canceled
+        mid-fetch, existing data is never touched.  Retries 0-bar fetches
+        3× with exponential backoff.
 
         Returns ``{"fetched": N, "inserted": M}``.
         """
-        self._delete_bars(symbol, timeframe)
-        all_bars = await self._fetch_all(symbol, timeframe, chunk_size)
+        import secrets
+
+        all_bars: list[OHLCVBar] = []
+        for attempt in range(3):
+            if attempt > 0:
+                backoff = (4 ** attempt) + secrets.randbelow(1000) / 1000
+                logger.warning("refresh_all retry %d for %s %s in %.1fs", attempt + 1, symbol, timeframe, backoff)
+                await asyncio.sleep(backoff)
+            all_bars = await self._fetch_all(symbol, timeframe, chunk_size)
+            if all_bars:
+                break
         if not all_bars:
+            logger.warning("refresh_all gave up on %s %s after 3 attempts — no data", symbol, timeframe)
             return {"fetched": 0, "inserted": 0}
-        self._store_bars(symbol, timeframe, all_bars, incremental=False)
+        self._replace_bars(symbol, timeframe, all_bars)
         return {"fetched": len(all_bars), "inserted": len(all_bars)}
 
     async def refresh_multi(
@@ -233,7 +248,12 @@ class MarketDataCache:
                 return sym, tf, await self.refresh(sym, tf, bars_count)
 
         results: dict[str, dict[str, dict[str, int]]] = {}
-        for sym, tf, res in await asyncio.gather(*[_one(s, tf) for s in symbols for tf in timeframes]):
+        tasks = [_one(s, tf) for s in symbols for tf in timeframes]
+        for outcome in await asyncio.gather(*tasks, return_exceptions=True):
+            if isinstance(outcome, Exception):
+                logger.error("refresh_multi task failed: %s", outcome)
+                continue
+            sym, tf, res = outcome
             results.setdefault(sym, {})[tf] = res
         return results
 
@@ -258,7 +278,12 @@ class MarketDataCache:
                 return sym, tf, await self.refresh_all(sym, tf, chunk_size)
 
         results: dict[str, dict[str, dict[str, int]]] = {}
-        for sym, tf, res in await asyncio.gather(*[_one(s, tf) for s in symbols for tf in timeframes]):
+        tasks = [_one(s, tf) for s in symbols for tf in timeframes]
+        for outcome in await asyncio.gather(*tasks, return_exceptions=True):
+            if isinstance(outcome, Exception):
+                logger.error("refresh_multi_all task failed: %s", outcome)
+                continue
+            sym, tf, res = outcome
             results.setdefault(sym, {})[tf] = res
         return results
 
@@ -275,24 +300,62 @@ class MarketDataCache:
     # -- query is set in __init__ to _query_local or _query_uc
 
     # ------------------------------------------------------------------
+    #  Exchange prefix fallback for bare symbols
+    # ------------------------------------------------------------------
+
+    _EXCHANGE_PREFIXES = ["NYSE:", "NASDAQ:", "AMEX:"]
+
+    @staticmethod
+    def _candidates(symbol: str) -> list[str]:
+        """Return [original, *prefixed] if bare, else just [original]."""
+        if ":" in symbol:
+            return [symbol]
+        return [symbol] + [f"{p}{symbol}" for p in MarketDataCache._EXCHANGE_PREFIXES]
+
+    # ------------------------------------------------------------------
     #  Fetch
     # ------------------------------------------------------------------
 
     @staticmethod
     async def _fetch(symbol: str, timeframe: str, count: int) -> list[OHLCVBar]:
-        async with TVData() as tv:
-            return await tv.get_ohlcv(symbol, timeframe, count)
+        candidates = MarketDataCache._candidates(symbol)
+        errors = []
+        for sym in candidates:
+            for attempt in range(3):
+                try:
+                    async with TVData() as tv:
+                        bars = await tv.get_ohlcv(sym, timeframe, count)
+                    if bars:
+                        return bars
+                    break
+                except (asyncio.TimeoutError, websockets.ConnectionClosed, ConnectionError, ValueError) as e:
+                    errors.append(f"{sym} a{attempt+1}: {e.__class__.__name__}")
+                    if attempt == 2:
+                        continue
+                    backoff = 2 ** attempt + secrets.randbelow(1000) / 1000
+                    await asyncio.sleep(backoff)
+        logger.warning("_fetch empty for %s %s after %s: %s", symbol, timeframe, candidates, "; ".join(errors[-3:]))
+        return []
 
     @staticmethod
     async def _fetch_all(symbol: str, timeframe: str, chunk_size: int) -> list[OHLCVBar]:
-        for attempt in range(3):
-            try:
-                async with TVData() as tv:
-                    return await tv.get_ohlcv_all(symbol, timeframe, chunk_size)
-            except websockets.ConnectionClosed:
-                if attempt == 2:
-                    raise
-                await asyncio.sleep(2 ** attempt)
+        candidates = MarketDataCache._candidates(symbol)
+        errors = []
+        for sym in candidates:
+            for attempt in range(3):
+                try:
+                    async with TVData() as tv:
+                        bars = await tv.get_ohlcv_all(sym, timeframe, chunk_size)
+                    if bars:
+                        return bars
+                    break
+                except (asyncio.TimeoutError, websockets.ConnectionClosed, ConnectionError, ValueError) as e:
+                    errors.append(f"{sym} a{attempt+1}: {e.__class__.__name__}")
+                    if attempt == 2:
+                        continue
+                    backoff = 2 ** attempt + secrets.randbelow(1000) / 1000
+                    await asyncio.sleep(backoff)
+        logger.warning("_fetch_all empty for %s %s after %s: %s", symbol, timeframe, candidates, "; ".join(errors[-3:]))
         return []
 
     # ------------------------------------------------------------------
@@ -389,6 +452,49 @@ class MarketDataCache:
     # ------------------------------------------------------------------
     #  Store
     # ------------------------------------------------------------------
+
+    def _replace_bars(
+        self, symbol: str, timeframe: str, bars: list[dict]
+    ) -> None:
+        """Atomically replace all bars for (symbol, timeframe).
+
+        Uses ``replaceWhere`` in spark mode (single Delta commit).
+        In SDK mode, deletes then inserts (safe because caller fetches
+        before calling this — a mid-operation cancel only loses the
+        narrow DELETE→INSERT window, not the long fetch window).
+        """
+        if self._mode == "local":
+            self._store_local(symbol, timeframe, bars, incremental=False)
+        elif self._mode == "spark":
+            self._replace_spark(symbol, timeframe, bars)
+        else:
+            self._delete_bars(symbol, timeframe)
+            self._store_sdk(symbol, timeframe, bars, incremental=False)
+
+    def _replace_spark(
+        self, symbol: str, timeframe: str, bars: list[dict]
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        rows = [
+            (
+                symbol,
+                timeframe,
+                datetime.fromtimestamp(b["timestamp"], tz=timezone.utc),
+                float(b["open"]), float(b["high"]), float(b["low"]),
+                float(b["close"]), float(b["volume"]),
+                now,
+                _fmt_tv_timestamp(b["timestamp"], timeframe),
+            )
+            for b in bars
+        ]
+        df = self._spark.createDataFrame(rows, schema=(
+            "symbol STRING, timeframe STRING, timestamp TIMESTAMP, "
+            "open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, "
+            "volume DOUBLE, _updated_at TIMESTAMP, timestamp_str STRING"
+        ))
+        df.write.mode("overwrite").option(
+            "replaceWhere", f"symbol = '{symbol}' AND timeframe = '{timeframe}'"
+        ).insertInto(_TABLE)
 
     def _store_bars(
         self, symbol: str, timeframe: str, bars: list[dict], incremental: bool

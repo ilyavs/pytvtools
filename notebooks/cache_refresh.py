@@ -78,16 +78,18 @@ total_inserted = 0
 
 is_single = bool(symbol)
 
+import secrets as _sec
+
 if mode == "backfill":
-    BATCH_SIZE = 1 if is_single else 10
-    MAX_CONCURRENT = 1 if is_single else 2
+    BATCH_SIZE = 1 if is_single else 5
+    MAX_CONCURRENT = 1 if is_single else 1
     CHUNK_SIZE = 4000
     refresh_func = cache.refresh_multi_all
     refresh_kwargs = {"chunk_size": CHUNK_SIZE, "max_concurrent": MAX_CONCURRENT}
     print(f"Using paginated backfill: chunk_size={CHUNK_SIZE}, batch={BATCH_SIZE}, concurrency={MAX_CONCURRENT}")
 else:
-    BATCH_SIZE = 1 if is_single else 25
-    MAX_CONCURRENT = 1 if is_single else 2
+    BATCH_SIZE = 1 if is_single else 10
+    MAX_CONCURRENT = 1 if is_single else 1
     BARS_COUNT = 500 if is_single else 2000
     refresh_func = cache.refresh_multi
     refresh_kwargs = {"bars_count": BARS_COUNT, "max_concurrent": MAX_CONCURRENT}
@@ -100,14 +102,22 @@ for i in range(0, len(symbols), BATCH_SIZE):
 
     result = await refresh_func(batch, [timeframe], **refresh_kwargs)
 
+    fails = 0
     for sym in batch:
         if sym in result and timeframe in result[sym]:
             r = result[sym][timeframe]
             total_fetched += r["fetched"]
             total_inserted += r["inserted"]
+            if r.get("fetched", 0) == 0:
+                fails += 1
+                print(f"  !! {sym} returned 0 bars")
+        else:
+            fails += 1
+            print(f"  !! {sym} missing from results")
 
-    print(f"  -> fetched={total_fetched} inserted={total_inserted} (cumulative)")
-    await asyncio.sleep(5)
+    print(f"  -> fetched={total_fetched} inserted={total_inserted} (cumulative, {fails} failures in batch)")
+    # Jittered sleep between batches to avoid rate-limit patterns
+    await asyncio.sleep(5 + _sec.randbelow(3000) / 1000)
 
 # COMMAND ----------
 

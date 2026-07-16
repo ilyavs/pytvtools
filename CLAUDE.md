@@ -23,6 +23,16 @@ The core package is standalone — synced to [pytvtools-core](https://github.com
 
 This copies `src/pytvtools_core/`, `tests/`, and `notebooks/` to the standalone repo, commits, then push to GitHub. The Databricks workspace auto-syncs from the git folder.
 
+**IMPORTANT — workspace sync does NOT happen automatically.** After pushing to GitHub, force-sync the workspace git folder via SDK (it's a Databricks Repo, `ObjectType.REPO`, not a plain Workspace Git Folder):
+
+```python
+from databricks.sdk import WorkspaceClient
+ws = WorkspaceClient(profile="DEFAULT")
+ws.repos.update(repo_id=2757908263996995, branch="main", dangerously_force_discard_all=True)
+```
+
+The repo ID (`2757908263996995`) is the `resource_id` from the workspace object at `/Users/sl.ilya1987@gmail.com/pytvtools-core`. The SDK's `repos.list()` may return empty for this repo — get the ID via `ws.workspace.get_status(path)` which returns `object_type=REPO`. Always verify via `workspace.export()` and check for new-code markers before assuming jobs will pick it up.
+
 During local development, install both editable:
 
     pip install -e src\pytvtools_core
@@ -397,3 +407,73 @@ Seven new watchlists were added to `src/pytvtools_core/watchlists.py` alongside 
 ```bash
 ssh -L 9222:localhost:9222 user@oracle-arm-instance
 ```
+
+## Pine Script development — hard-won lessons
+
+### `pine_facade_deploy` works (despite earlier failures)
+
+`pine_facade_deploy` is the **preferred** deployment method — it saves via REST API + adds via `_createStudy`, bypassing Pine Editor entirely. Earlier failures were caused by TV data connection loss, not the deployment method itself.
+
+### Caching gotcha
+
+`pine_facade_deploy` with the same `shorttitle` returns the **cached old version**. Always pass a unique `name` param (e.g. `"CL_Levels_v2"`) to force a fresh compile.
+
+### Connection loss — "Restore connection" button
+
+After too many study add/remove cycles, TV's data feed drops. The "Restore connection" button appears at the bottom of the chart. Symptom: studies stuck on `isLoading: true` indefinitely. Click the button to re-establish the data feed. After restoration, `_data._items` is populated normally.
+
+### Study state verification
+
+Use the chart API to check study state:
+```javascript
+var study = chart().getStudyById(entityId);
+study.dataLength()  // > 0 means data loaded
+study.isLoading()   // false when done
+study.hasError()    // true if runtime error
+```
+
+### `pine_facade_deploy` — always extract function calls to variables
+
+The `pine_facade` REST API compiler is stricter than `pine_check`. Calls like `ta.change()`, `ta.cross()`, etc. inside conditional expressions cause syntax errors. **Always assign to a variable first:**
+
+```pine
+// BROKEN — "Syntax error: Missing closing parenthesis" via pine_facade_deploy
+f_new_line(..., en1 and ta.change(time(p1)) != 0)
+
+// FIXED — works via pine_facade_deploy
+t1 = ta.change(time(p1)) != 0
+f_new_line(..., en1 and t1)
+```
+
+### Dummy `plot(na)` for line.new-only indicators
+
+Indicators that only draw `line.new` (no `plot()`) report `hasError: true` even when working correctly. Add a dummy plot to suppress this:
+
+```pine
+plot(na, title="dummy")
+```
+
+### Runtime error: `array.get()` index 0 out of bounds
+
+Pine Script executes `for j = 0 to size - 1` once even when `size == 0` (the range `0 to -1` is treated as one iteration). **Always guard with `if size > 0`** before iterating over arrays.
+
+```pine
+f_check_lines(la, active, prices) =>
+    int size = array.size(la)
+    if size > 0  // REQUIRED — prevents out-of-bounds
+        for j = 0 to size - 1
+            ...
+```
+
+### Reading lines from custom indicators
+
+Lines are accessed via the internal getter path (not public chart API):
+```
+ds._graphics._primitivesCollection.dwglines.get("lines").get(false)._primitivesDataById
+```
+
+The `get_pine_lines` TV method handles this, returning deduplicated price levels per study.
+
+### Compilation warnings (severity 4)
+
+Warnings about conditional `ta.change()` or `f_new_line` calls are non-blocking. They don't prevent deployment or affect runtime behavior.
