@@ -398,3 +398,32 @@ class TestTickerPalette:
         html = chart.render()
         assert '#f00"' in html or "'#f00'" in html
         assert '#0f0"' in html or "'#0f0'" in html
+
+
+# ── legend + render_body ─────────────────────────────────────────────
+
+class TestLegendRenderBody:
+    def test_legend_in_render(self):
+        chart = Chart(ticker="AAPL")
+        chart.set_candles(sample_bars(5))
+        chart.add_line([1, 2, 3], name="TestLine")
+        html = chart.render()
+        assert "tv-legend" in html
+        assert "AAPL" in html
+        assert "TestLine" in html
+
+    def test_render_body_no_wrapper(self):
+        chart = Chart()
+        chart.set_candles(sample_bars(5))
+        body = chart.render_body()
+        assert "<!DOCTYPE" not in body
+        assert "<html" not in body
+        assert "<body" not in body
+        assert "chart0" in body
+        assert "LightweightCharts.createChart" in body
+
+    def test_render_body_has_legend(self):
+        chart = Chart(ticker="AAPL")
+        chart.set_candles(sample_bars(5))
+        body = chart.render_body()
+        assert "tv-legend" in body

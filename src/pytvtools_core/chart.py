@@ -319,7 +319,7 @@ class Chart:
             '<style>',
             '  * { margin: 0; padding: 0; box-sizing: border-box; }',
             '  body { background: #11171C; font-family: -apple-system, sans-serif; display: flex; justify-content: center; }',
-            '  .chart-wrap { width: ' + str(self._width) + 'px; }',
+            '  .chart-wrap { width: ' + str(self._width) + 'px; position: relative; }',
             '  .chart-ticker { color: #E8ECF0; padding: 12px 0 4px; font-size: 15px; font-weight: 600; }',
             '</style>',
             '</head>',
@@ -339,6 +339,7 @@ class Chart:
 
         parts.append('</div>')
         parts.append('<script>\n' + '\n\n'.join(scripts) + '\n</script>')
+        parts.append(self._legend_html())
         parts.extend(['</body>', '</html>'])
         return '\n'.join(parts)
 
@@ -346,6 +347,103 @@ class Chart:
         """Render and write the HTML page to *path*."""
         with open(path, "w", encoding="utf-8") as f:
             f.write(self.render())
+
+    # ── legend ─────────────────────────────────────────────────────
+
+    def _series_data_for_legend(self) -> list[dict]:
+        """Return per-pane lists of series metadata for legend rendering."""
+        result = []
+        for pane in self._panes:
+            items = []
+            for s in pane.series:
+                last_val = s.data[-1]["value"] if s.data else None
+                items.append({
+                    "kind": s.kind,
+                    "name": s.name,
+                    "color": s.color,
+                    "last_value": last_val,
+                })
+            result.append({
+                "has_candles": pane.candles is not None,
+                "bar_count": len(pane.candles) if pane.candles else 0,
+                "series": items,
+            })
+        return result
+
+    def _legend_html(self) -> str:
+        """Return an HTML string for the floating legend panel."""
+        lines = [
+            '<style>',
+            '.tv-legend {',
+            '  position: absolute; top: 12px; right: 12px;',
+            '  background: rgba(17, 23, 28, 0.9);',
+            '  border: 1px solid #2A3440;',
+            '  border-radius: 6px;',
+            '  padding: 8px 12px;',
+            '  font-family: -apple-system, monospace;',
+            '  font-size: 12px;',
+            '  color: #E8ECF0;',
+            '  min-width: 180px;',
+            '  max-height: calc(100% - 24px);',
+            '  overflow-y: auto;',
+            '  z-index: 10;',
+            '}',
+            '.tv-legend-header {',
+            '  font-size: 13px;',
+            '  font-weight: 600;',
+            '  margin-bottom: 6px;',
+            '  padding-bottom: 4px;',
+            '  border-bottom: 1px solid #2A3440;',
+            '}',
+            '.tv-legend-bars { font-weight: 400; color: #758696; }',
+            '.tv-legend-row {',
+            '  display: flex; align-items: center;',
+            '  gap: 6px; padding: 2px 0;',
+            '  cursor: default;',
+            '}',
+            '.tv-legend-row.hidden { opacity: 0.4; text-decoration: line-through; }',
+            '.tv-legend-eye { cursor: pointer; user-select: none; }',
+            '.tv-legend-swatch {',
+            '  display: inline-block; width: 10px; height: 10px;',
+            '  border-radius: 2px; cursor: pointer;',
+            '}',
+            '.tv-legend-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
+            '.tv-legend-value { text-align: right; color: #758696; font-variant-numeric: tabular-nums; }',
+            '</style>',
+        ]
+        for i, pane_data in enumerate(self._series_data_for_legend()):
+            lines.append(f'<div id="l{i}" class="tv-legend" data-pane="{i}">')
+            header_text = _escape_html(self._ticker) if self._ticker else ""
+            lines.append(
+                f'  <div class="tv-legend-header">'
+                f'{header_text}  '
+                f'<span class="tv-legend-bars">{pane_data["bar_count"]} bars</span>'
+                f'</div>'
+            )
+            for j, s in enumerate(pane_data["series"]):
+                last_val = s["last_value"]
+                val_str = f"{last_val:.2f}" if last_val is not None else ""
+                lines.append(f'  <div class="tv-legend-row" data-series="{j}">')
+                lines.append(f'    <span class="tv-legend-eye" data-visible="1">\U0001f441</span>')
+                lines.append(f'    <span class="tv-legend-swatch" style="background:{s["color"]}"></span>')
+                lines.append(f'    <span class="tv-legend-name">{_escape_html(s["name"])}</span>')
+                lines.append(f'    <span class="tv-legend-value">{val_str}</span>')
+                lines.append(f'  </div>')
+            lines.append('</div>')
+        return '\n'.join(lines)
+
+    def render_body(self) -> str:
+        """Return chart divs + embedded script only — no <html>/<head>/<body> wrapper."""
+        parts: list[str] = []
+        for i, pane in enumerate(self._panes):
+            height = pane.height if pane.height else self._height
+            parts.append(f'<div id="chart{i}" style="width:100%;height:{height}px"></div>')
+        scripts: list[str] = []
+        for i, pane in enumerate(self._panes):
+            scripts.append(self._pane_js(i, pane))
+        parts.append('<script>\n' + '\n\n'.join(scripts) + '\n</script>')
+        parts.append(self._legend_html())
+        return '\n'.join(parts)
 
     # ── helpers ────────────────────────────────────────────────────
 
