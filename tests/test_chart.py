@@ -427,3 +427,34 @@ class TestLegendRenderBody:
         chart.set_candles(sample_bars(5))
         body = chart.render_body()
         assert "tv-legend" in body
+
+    def test_controls_js_present(self):
+        chart = Chart()
+        chart.set_candles(sample_bars(5))
+        chart.add_line([1, 2, 3], name="L")
+        html = chart.render()
+        assert "setVisible" in html
+        assert "applyOptions" in html
+
+    def test_controls_body_has_js(self):
+        chart = Chart()
+        chart.set_candles(sample_bars(5))
+        body = chart.render_body()
+        assert "setVisible" in body
+
+    def test_controls_ctx_registers_series(self):
+        chart = Chart()
+        chart.set_candles(sample_bars(5))
+        chart.add_line([1, 2, 3], name="L1")
+        chart.add_line([4, 5, 6], name="L2")
+        html = chart.render()
+        assert "__chartCtx" in html
+        assert "s0_0" in html
+        assert "s0_1" in html
+
+    def test_controls_data_series_matches_ctx(self):
+        chart = Chart()
+        chart.set_candles(sample_bars(5))
+        chart.add_line([1, 2, 3], name="L1")
+        html = chart.render()
+        assert 'data-series="s0_0"' in html

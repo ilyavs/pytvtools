@@ -110,6 +110,14 @@ def _auto_color(index: int) -> str:
     return f"hsl({hue:.1f}, 65%, 55%)"
 
 
+_COLOR_OPTIONS: dict[str, str] = {
+    "line": "color",
+    "area": "lineColor",
+    "histogram": "color",
+    "baseline": "lineColor",
+}
+
+
 # ── internal data model ──────────────────────────────────────────────
 
 class _Series:
@@ -340,6 +348,7 @@ class Chart:
         parts.append('</div>')
         parts.append('<script>\n' + '\n\n'.join(scripts) + '\n</script>')
         parts.append(self._legend_html())
+        parts.append('<script>\n' + self._controls_js() + '\n</script>')
         parts.extend(['</body>', '</html>'])
         return '\n'.join(parts)
 
@@ -423,13 +432,73 @@ class Chart:
             for j, s in enumerate(pane_data["series"]):
                 last_val = s["last_value"]
                 val_str = f"{last_val:.2f}" if last_val is not None else ""
-                lines.append(f'  <div class="tv-legend-row" data-series="{j}">')
+                lines.append(f'  <div class="tv-legend-row" data-series="s{i}_{j}">')
                 lines.append(f'    <span class="tv-legend-eye" data-visible="1">\U0001f441</span>')
                 lines.append(f'    <span class="tv-legend-swatch" style="background:{s["color"]}"></span>')
                 lines.append(f'    <span class="tv-legend-name">{_escape_html(s["name"])}</span>')
                 lines.append(f'    <span class="tv-legend-value">{val_str}</span>')
                 lines.append(f'  </div>')
             lines.append('</div>')
+        return '\n'.join(lines)
+
+    def _controls_js(self) -> str:
+        """Return an IIFE that enables interactive legend controls."""
+        lines: list[str] = []
+        lines.append('(function() {')
+        lines.append('  var ctx = window.__chartCtx || (window.__chartCtx = {});')
+        lines.append('  function setupLegend(paneIdx) {')
+        lines.append("    var leg = document.getElementById('l' + paneIdx);")
+        lines.append('    if (!leg) return;')
+        lines.append("    leg.addEventListener('click', function(e) {")
+
+        # Eye toggle
+        lines.append("      var eye = e.target.closest('.tv-legend-eye');")
+        lines.append('      if (eye) {')
+        lines.append("        var row = eye.closest('.tv-legend-row');")
+        lines.append('        var sid = row.dataset.series;')
+        lines.append('        var entry = ctx[sid];')
+        lines.append('        if (entry) {')
+        lines.append('          entry.visible = !entry.visible;')
+        lines.append('          entry.series.setVisible(entry.visible);')
+        lines.append("          row.classList.toggle('hidden', !entry.visible);")
+        lines.append('        }')
+        lines.append('        return;')
+        lines.append('      }')
+
+        # Color swatch
+        lines.append("      var swatch = e.target.closest('.tv-legend-swatch');")
+        lines.append('      if (swatch) {')
+        lines.append("        var row = swatch.closest('.tv-legend-row');")
+        lines.append('        var sid = row.dataset.series;')
+        lines.append('        var entry = ctx[sid];')
+        lines.append('        if (!entry) return;')
+        lines.append("        var picker = document.createElement('input');")
+        lines.append("        picker.type = 'color';")
+        lines.append('        picker.value = entry.color;')
+        lines.append("        picker.addEventListener('input', function() {")
+        lines.append('          var c = picker.value;')
+        lines.append('          swatch.style.background = c;')
+        lines.append('          entry.color = c;')
+        lines.append('          var opts = {};')
+        lines.append('          opts[entry.colorKey] = c;')
+        lines.append('          entry.series.applyOptions(opts);')
+        lines.append('        });')
+        lines.append('        picker.click();')
+        lines.append('      }')
+
+        lines.append('    });')
+        lines.append('  }')
+
+        for i, pane in enumerate(self._panes):
+            if pane.candles:
+                lines.append(f"  ctx['cs{i}'] = {{ visible: true, series: cs{i} }};")
+            for j, s in enumerate(pane.series):
+                color_key = _COLOR_OPTIONS.get(s.kind, "color")
+                sid = f"s{i}_{j}"
+                lines.append(f"  ctx['{sid}'] = {{ visible: true, series: {sid}, colorKey: '{color_key}', color: '{s.color}' }};")
+            lines.append(f"  setupLegend({i});")
+
+        lines.append('})();')
         return '\n'.join(lines)
 
     def render_body(self) -> str:
@@ -443,6 +512,7 @@ class Chart:
             scripts.append(self._pane_js(i, pane))
         parts.append('<script>\n' + '\n\n'.join(scripts) + '\n</script>')
         parts.append(self._legend_html())
+        parts.append('<script>\n' + self._controls_js() + '\n</script>')
         return '\n'.join(parts)
 
     # ── helpers ────────────────────────────────────────────────────
