@@ -1,0 +1,454 @@
+"""Self-contained HTML chart generator using Lightweight Charts.
+
+Usage::
+
+    from pytvtools_core.chart import Chart
+
+    chart = Chart(title="BTCUSD - Daily")
+    chart.set_candles(bars)
+    chart.add_line(sma_vals, name="SMA 50", color="#4E5185")
+    chart.render()  # -> HTML string
+    chart.save("chart.html")  # -> file
+
+Data-source agnostic — accepts any list of dicts with
+``timestamp`` / ``time`` + OHLCV keys.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+from datetime import datetime, timezone
+from typing import Any
+
+
+def _format_time(ts: float, timeframe: str | None = None) -> str | int:
+    """Convert unix timestamp (seconds) to Lightweight Charts time format.
+
+    Daily/weekly/monthly data uses ISO date strings; intraday uses unix
+    seconds (integer).  Auto-detects daily when the timestamp falls at
+    midnight UTC.
+    """
+    if timeframe:
+        tf = timeframe.upper().strip()
+        if tf in ("D", "W", "M") or tf[-1] in ("D", "W", "M"):
+            return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    if dt.hour == 0 and dt.minute == 0 and dt.second == 0:
+        return dt.strftime("%Y-%m-%d")
+    return int(ts)
+
+
+def _extract_bars(
+    bars: list[dict[str, Any]],
+    timeframe: str | None = None,
+) -> tuple[list[str | int], list[dict[str, Any]], list[float]]:
+    """Convert raw OHLCV bars into Lightweight Charts candle format.
+
+    Returns ``(times, candles, volumes)``.
+    """
+    times: list[str | int] = []
+    candles: list[dict[str, Any]] = []
+    volumes: list[float] = []
+    for b in bars:
+        raw = b.get("time", b.get("timestamp", 0))
+        if isinstance(raw, float):
+            t = _format_time(raw, timeframe)
+        elif isinstance(raw, int) and raw > 1e10:
+            t = _format_time(raw, timeframe)
+        else:
+            t = raw
+        times.append(t)
+        candles.append({
+            "time": t,
+            "open": float(b["open"]),
+            "high": float(b["high"]),
+            "low": float(b["low"]),
+            "close": float(b["close"]),
+        })
+        volumes.append(float(b.get("volume", 0)))
+    return times, candles, volumes
+
+
+def _escape_html(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+# ── chart / series style presets ──────────────────────────────────────
+
+_CHART_LAYOUT: dict[str, Any] = {
+    "layout": {
+        "textColor": "#E8ECF0",
+        "background": {"type": "solid", "color": "#11171C"},
+    },
+    "grid": {
+        "vertLines": {"color": "#2A3440"},
+        "horzLines": {"color": "#2A3440"},
+    },
+    "crosshair": {"mode": 0},
+    "rightPriceScale": {"borderColor": "#2A3440"},
+    "timeScale": {
+        "timeVisible": True,
+        "secondsVisible": False,
+        "borderColor": "#2A3440",
+    },
+}
+
+_CANDLE_STYLE: dict[str, str] = {
+    "upColor": "#26a69a",
+    "downColor": "#ef5350",
+    "borderUpColor": "#26a69a",
+    "borderDownColor": "#ef5350",
+    "wickUpColor": "#26a69a",
+    "wickDownColor": "#ef5350",
+}
+
+
+def _auto_color(index: int) -> str:
+    """Return a distinct hex color using golden-angle hue distribution."""
+    hue = (index * 137.508) % 360
+    return f"hsl({hue:.1f}, 65%, 55%)"
+
+
+# ── internal data model ──────────────────────────────────────────────
+
+class _Series:
+    __slots__ = ("kind", "data", "name", "color", "options")
+    def __init__(
+        self,
+        kind: str,
+        data: list[dict[str, Any]],
+        name: str,
+        color: str,
+        options: dict[str, Any] | None = None,
+    ):
+        self.kind = kind
+        self.data = data
+        self.name = name
+        self.color = color
+        self.options = options or {}
+
+
+class _Pane:
+    __slots__ = ("height", "bar_times", "candles", "series", "markers", "volume_data")
+
+    def __init__(self, height: int | None = None):
+        self.height = height
+        self.bar_times: list[str | int] = []
+        self.candles: list[dict[str, Any]] | None = None
+        self.series: list[_Series] = []
+        self.markers: list[dict[str, Any]] | None = None
+        self.volume_data: list[dict[str, Any]] | None = None
+
+
+# ── public API ───────────────────────────────────────────────────────
+
+class Chart:
+    """Self-contained Lightweight Charts HTML generator.
+
+    Parameters
+    ----------
+    width:
+        Chart width in pixels.
+    height:
+        Total height of the chart area.
+    title:
+        HTML page title.
+    ticker:
+        Symbol ticker displayed in the chart legend.
+    palette:
+        Optional list of hex colors to cycle through for series.
+        Falls back to golden-angle auto-colors when None.
+    main_height:
+        Height of the main (first) pane in pixels.
+        If None, uses the full *height*.
+    """
+
+    def __init__(
+        self,
+        width: int = 1200,
+        height: int = 700,
+        title: str = "",
+        ticker: str = "",
+        palette: list[str] | None = None,
+        main_height: int | None = None,
+    ):
+        self._width = width
+        self._height = height
+        self._title = title
+        self._ticker = ticker
+        self._palette = palette
+        self._color_index = 0
+        self._panes: list[_Pane] = [_Pane(height=main_height or height)]
+        self._pane_sizes: list[int] = []
+        self._auto_height = main_height is None
+        self._bar_times: list[str | int] | None = None
+
+    def set_candles(
+        self,
+        bars: list[dict[str, Any]],
+        *,
+        timeframe: str | None = None,
+        pane: int = 0,
+    ) -> None:
+        """Set OHLCV candle data for a pane.
+
+        *bars* accepts either ``OHLCVBar`` dicts (with ``timestamp`` key)
+        or pre-formatted dicts with a ``time`` key.
+        """
+        times, candles, volumes = _extract_bars(bars, timeframe)
+        if self._bar_times is None:
+            self._bar_times = times
+        p = self._panes[pane]
+        p.bar_times = times
+        p.candles = candles
+        if any(v > 0 for v in volumes):
+            p.volume_data = [
+                {"time": times[i], "value": volumes[i], "color": (
+                    "#26a69a" if candles[i]["close"] >= candles[i]["open"]
+                    else "#ef5350"
+                )}
+                for i in range(len(candles))
+            ]
+
+    def add_line(
+        self,
+        values: list[float | None],
+        name: str = "",
+        color: str | None = None,
+        *,
+        pane: int = 0,
+        line_width: int = 2,
+        **kwargs: Any,
+    ) -> None:
+        """Add a line series (SMA, RSI, etc.) aligned to candle timestamps."""
+        self._add_series("line", values, name, color, pane, lineWidth=line_width, **kwargs)
+
+    def add_histogram(
+        self,
+        values: list[float | None],
+        name: str = "",
+        color: str | None = None,
+        *,
+        pane: int = 0,
+        colors: list[str] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Add a histogram series (volume, MACD histogram).
+
+        *colors* can override per-bar color.
+        """
+        self._add_series("histogram", values, name, color, pane,
+                         per_bar_colors=colors, **kwargs)
+
+    def add_area(
+        self,
+        values: list[float | None],
+        name: str = "",
+        color: str | None = None,
+        *,
+        pane: int = 0,
+        line_width: int = 2,
+        top_color: str | None = None,
+        bottom_color: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Add an area series (filled bands)."""
+        opts = dict(lineWidth=line_width)
+        if top_color:
+            opts["topColor"] = top_color
+        if bottom_color:
+            opts["bottomColor"] = bottom_color
+        self._add_series("area", values, name, color, pane, **opts, **kwargs)
+
+    def add_baseline(
+        self,
+        values: list[float | None],
+        name: str = "",
+        color: str | None = None,
+        *,
+        pane: int = 0,
+        base_value: float = 0.0,
+        top_color: str = "rgba(255,166,0,0.3)",
+        bottom_color: str = "rgba(255,166,0,0.1)",
+        **kwargs: Any,
+    ) -> None:
+        """Add a baseline series (oscillators around a center value)."""
+        self._add_series("baseline", values, name, color, pane,
+                         baseValue=base_value,
+                         topFillColor1=top_color,
+                         topFillColor2=top_color,
+                         bottomFillColor1=bottom_color,
+                         bottomFillColor2=bottom_color,
+                         **kwargs)
+
+    def add_markers(
+        self,
+        markers: list[dict[str, Any]],
+        *,
+        pane: int = 0,
+    ) -> None:
+        """Add event markers on the candle series.
+
+        Each marker::
+
+            {"time": "2024-01-15", "position": "aboveBar",
+             "color": "#e91e63", "shape": "arrowDown", "text": "Death Cross"}
+        """
+        self._panes[pane].markers = markers
+
+    def add_pane(self, height: int = 150) -> int:
+        """Add a new pane below existing ones. Returns the pane index."""
+        idx = len(self._panes)
+        p = _Pane(height=height)
+        if self._bar_times is not None:
+            p.bar_times = list(self._bar_times)
+        self._panes.append(p)
+        return idx
+
+    def render(self) -> str:
+        """Return a self-contained HTML page with the chart."""
+        parts: list[str] = [
+            '<!DOCTYPE html>',
+            '<html lang="en">',
+            '<head>',
+            '<meta charset="UTF-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
+            f'<title>{_escape_html(self._title)}</title>',
+            '<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>',
+            '<style>',
+            '  * { margin: 0; padding: 0; box-sizing: border-box; }',
+            '  body { background: #11171C; font-family: -apple-system, sans-serif; display: flex; justify-content: center; }',
+            '  .chart-wrap { width: ' + str(self._width) + 'px; }',
+            '  .chart-ticker { color: #E8ECF0; padding: 12px 0 4px; font-size: 15px; font-weight: 600; }',
+            '</style>',
+            '</head>',
+            '<body>',
+            '<div class="chart-wrap">',
+        ]
+
+        if self._ticker:
+            parts.append(f'<div class="chart-ticker">{_escape_html(self._ticker)}</div>')
+
+        scripts: list[str] = []
+
+        for i, pane in enumerate(self._panes):
+            height = pane.height if pane.height else self._height
+            parts.append(f'<div id="chart{i}" style="width:100%;height:{height}px"></div>')
+            scripts.append(self._pane_js(i, pane))
+
+        parts.append('</div>')
+        parts.append('<script>\n' + '\n\n'.join(scripts) + '\n</script>')
+        parts.extend(['</body>', '</html>'])
+        return '\n'.join(parts)
+
+    def save(self, path: str) -> None:
+        """Render and write the HTML page to *path*."""
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(self.render())
+
+    # ── helpers ────────────────────────────────────────────────────
+
+    def _next_color(self) -> str:
+        idx = self._color_index
+        self._color_index += 1
+        if self._palette:
+            return self._palette[idx % len(self._palette)]
+        return _auto_color(idx)
+
+    def _add_series(
+        self,
+        kind: str,
+        values: list[float | None],
+        name: str,
+        color: str | None,
+        pane_idx: int,
+        per_bar_colors: list[str] | None = None,
+        **options: Any,
+    ) -> None:
+        if color is None:
+            color = self._next_color()
+        pane = self._panes[pane_idx]
+        times = pane.bar_times
+        if not times:
+            msg = "Call set_candles() before adding series"
+            raise ValueError(msg)
+
+        n = min(len(times), len(values))
+        data: list[dict[str, Any]] = []
+        for i in range(n):
+            if values[i] is None:
+                continue
+            pt: dict[str, Any] = {"time": times[i], "value": values[i]}
+            if per_bar_colors and i < len(per_bar_colors) and per_bar_colors[i]:
+                pt["color"] = per_bar_colors[i]
+            data.append(pt)
+
+        if not options.get("color"):
+            if kind == "line":
+                options["color"] = color
+            elif kind == "area":
+                options.setdefault("lineColor", color)
+                options.setdefault("topColor", color)
+                options.setdefault("bottomColor", color)
+            elif kind == "baseline":
+                options.setdefault("lineColor", color)
+            elif kind == "histogram":
+                options.setdefault("color", color)
+
+        pane.series.append(_Series(kind, data, name, color, options))
+
+    def _pane_js(self, idx: int, pane: _Pane) -> str:
+        lines: list[str] = [
+            f'(function() {{',
+            f'  var chart = LightweightCharts.createChart(',
+            f'    document.getElementById("chart{idx}"),',
+            f'    {json.dumps(self._chart_options(pane))}',
+            f'  );',
+        ]
+
+        candle_var: str | None = None
+        if pane.candles:
+            candle_var = f"cs{idx}"
+            lines.append(f'  var {candle_var} = chart.addSeries(LightweightCharts.CandlestickSeries, {json.dumps(_CANDLE_STYLE)});')
+            lines.append(f'  {candle_var}.setData({json.dumps(pane.candles)});')
+
+            if pane.markers:
+                lines.append(f'  {candle_var}.setMarkers({json.dumps(pane.markers)});')
+
+        for j, s in enumerate(pane.series):
+            var = f"s{idx}_{j}"
+            series_type = _SERIES_TYPES[s.kind]
+            style = self._series_style(s)
+            lines.append(f'  var {var} = chart.addSeries(LightweightCharts.{series_type}, {json.dumps(style)});')
+            lines.append(f'  {var}.setData({json.dumps(s.data)});')
+
+        lines.append('})();')
+        return '\n  '.join(lines)
+
+    def _chart_options(self, pane: _Pane) -> dict[str, Any]:
+        height = pane.height if pane.height else self._height
+        base: dict[str, Any] = {
+            "width": self._width,
+            "height": height,
+        }
+        base.update(_CHART_LAYOUT)
+        return base
+
+    def _series_style(self, s: _Series) -> dict[str, Any]:
+        style: dict[str, Any] = dict(s.options)
+        if "title" not in style and s.name:
+            style["title"] = s.name
+        if "lastValueVisible" not in style:
+            style["lastValueVisible"] = False
+        if "priceLineVisible" not in style:
+            style["priceLineVisible"] = False
+        return style
+
+
+_SERIES_TYPES: dict[str, str] = {
+    "line": "LineSeries",
+    "histogram": "HistogramSeries",
+    "area": "AreaSeries",
+    "baseline": "BaselineSeries",
+}
