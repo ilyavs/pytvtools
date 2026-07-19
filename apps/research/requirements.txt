@@ -1,0 +1,4 @@
+fastapi>=0.115.0
+uvicorn>=0.34.0
+databricks-sdk>=0.43.0
+pytvtools-core>=0.1.0

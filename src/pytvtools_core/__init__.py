@@ -9,6 +9,7 @@ from pytvtools_core.watchlists import (
 from pytvtools_core.tvdata import TVData
 from pytvtools_core.cache import MarketDataCache
 from pytvtools_core.types import OHLCVBar
+from pytvtools_core.chart import Chart
 
 __all__ = [
     "rsi", "sma", "ema", "macd", "mfi", "bbands", "atr", "srsi", "supertrend", "dss",
@@ -21,4 +22,5 @@ __all__ = [
     "TVData",
     "MarketDataCache",
     "OHLCVBar",
+    "Chart",
 ]

@@ -283,7 +283,7 @@ class Chart:
     ) -> None:
         """Add a baseline series (oscillators around a center value)."""
         self._add_series("baseline", values, name, color, pane,
-                         baseValue=base_value,
+                         baseValue={"type": "price", "price": base_value},
                          topFillColor1=top_color,
                          topFillColor2=top_color,
                          bottomFillColor1=bottom_color,
@@ -324,30 +324,40 @@ class Chart:
             '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
             f'<title>{_escape_html(self._title)}</title>',
             '<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>',
-            '<style>',
-            '  * { margin: 0; padding: 0; box-sizing: border-box; }',
-            '  body { background: #11171C; font-family: -apple-system, sans-serif; display: flex; justify-content: center; }',
-            '  .chart-wrap { width: ' + str(self._width) + 'px; position: relative; }',
-            '  .chart-ticker { color: #E8ECF0; padding: 12px 0 4px; font-size: 15px; font-weight: 600; }',
-            '</style>',
-            '</head>',
-            '<body>',
-            '<div class="chart-wrap">',
+        '<style>',
+        '  * { margin: 0; padding: 0; box-sizing: border-box; }',
+        '  body { background: #11171C; font-family: -apple-system, sans-serif; display: flex; justify-content: center; }',
+        '  .chart-wrap { width: ' + str(self._width) + 'px; display: flex; flex-direction: row; }',
+        '  .chart-ticker { color: #E8ECF0; padding: 12px 0 4px; font-size: 15px; font-weight: 600; }',
+        '</style>',
+        '</head>',
+        '<body>',
         ]
 
         if self._ticker:
             parts.append(f'<div class="chart-ticker">{_escape_html(self._ticker)}</div>')
 
-        scripts: list[str] = []
+        parts.append('<div class="chart-wrap">')
+        parts.append('<div class="chart-panes">')
 
+        scripts: list[str] = []
         for i, pane in enumerate(self._panes):
             height = pane.height if pane.height else self._height
             parts.append(f'<div id="chart{i}" style="width:100%;height:{height}px"></div>')
             scripts.append(self._pane_js(i, pane))
 
         parts.append('</div>')
+        parts.append('<div class="chart-legends">')
+        for i, pane in enumerate(self._panes):
+            height = pane.height if pane.height else self._height
+            parts.append(self._pane_legend_html(i, height=height))
+        parts.append('</div>')
+        parts.append('</div>')
+        parts.append('\n'.join(self._LEGEND_CSS))
+
         parts.append('<script>\n' + '\n\n'.join(scripts) + '\n</script>')
-        parts.append(self._legend_html())
+        if len(self._panes) > 1:
+            parts.append('<script>\n' + self._sync_js() + '\n</script>')
         parts.append('<script>\n' + self._controls_js() + '\n</script>')
         parts.extend(['</body>', '</html>'])
         return '\n'.join(parts)
@@ -365,7 +375,12 @@ class Chart:
         for pane in self._panes:
             items = []
             for s in pane.series:
-                last_val = s.data[-1]["value"] if s.data else None
+                last_val = None
+                if s.data:
+                    for pt in reversed(s.data):
+                        if "value" in pt:
+                            last_val = pt["value"]
+                            break
                 items.append({
                     "kind": s.kind,
                     "name": s.name,
@@ -379,73 +394,85 @@ class Chart:
             })
         return result
 
-    def _legend_html(self) -> str:
-        """Return an HTML string for the floating legend panel."""
-        lines = [
-            '<style>',
-            '.tv-legend {',
-            '  position: absolute; top: 12px; right: 12px;',
-            '  background: rgba(17, 23, 28, 0.9);',
-            '  border: 1px solid #2A3440;',
-            '  border-radius: 6px;',
-            '  padding: 8px 12px;',
-            '  font-family: -apple-system, monospace;',
-            '  font-size: 12px;',
-            '  color: #E8ECF0;',
-            '  min-width: 180px;',
-            '  max-height: calc(100% - 24px);',
-            '  overflow-y: auto;',
-            '  z-index: 10;',
-            '}',
-            '.tv-legend-header {',
-            '  font-size: 13px;',
-            '  font-weight: 600;',
-            '  margin-bottom: 6px;',
-            '  padding-bottom: 4px;',
-            '  border-bottom: 1px solid #2A3440;',
-            '}',
-            '.tv-legend-bars { font-weight: 400; color: #758696; }',
-            '.tv-legend-row {',
-            '  display: flex; align-items: center;',
-            '  gap: 6px; padding: 2px 0;',
-            '  cursor: default;',
-            '}',
-            '.tv-legend-row.hidden { opacity: 0.4; text-decoration: line-through; }',
-            '.tv-legend-eye { cursor: pointer; user-select: none; }',
-            '.tv-legend-swatch {',
-            '  display: inline-block; width: 10px; height: 10px;',
-            '  border-radius: 2px; cursor: pointer;',
-            '}',
-            '.tv-legend-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
-            '.tv-legend-value { text-align: right; color: #758696; font-variant-numeric: tabular-nums; }',
-            '</style>',
-        ]
-        for i, pane_data in enumerate(self._series_data_for_legend()):
-            lines.append(f'<div id="l{i}" class="tv-legend" data-pane="{i}">')
-            header_text = _escape_html(self._ticker) if self._ticker else ""
-            lines.append(
-                f'  <div class="tv-legend-header">'
-                f'{header_text}  '
-                f'<span class="tv-legend-bars">{pane_data["bar_count"]} bars</span>'
-                f'</div>'
-            )
-            for j, s in enumerate(pane_data["series"]):
-                last_val = s["last_value"]
-                val_str = f"{last_val:.2f}" if last_val is not None else ""
-                lines.append(f'  <div class="tv-legend-row" data-series="s{i}_{j}">')
-                lines.append(f'    <span class="tv-legend-eye" data-visible="1">\U0001f441</span>')
-                lines.append(f'    <span class="tv-legend-swatch" style="background:{s["color"]}"></span>')
-                lines.append(f'    <span class="tv-legend-name">{_escape_html(s["name"])}</span>')
-                lines.append(f'    <span class="tv-legend-value">{val_str}</span>')
-                lines.append(f'  </div>')
-            lines.append('</div>')
+    def _pane_legend_inner_html(self, pane_idx: int, top_px: int | None = None) -> str:
+        """Return legend rows for the given pane index (no outer wrapper)."""
+        pane_data = self._series_data_for_legend()[pane_idx]
+        lines = []
+        for j, s in enumerate(pane_data["series"]):
+            last_val = s["last_value"]
+            val_str = f"{last_val:.2f}" if last_val is not None else ""
+            lines.append(f'  <div class="tv-legend-row" data-series="s{pane_idx}_{j}">')
+            lines.append(f'    <span class="tv-legend-eye" data-visible="1">\U0001f441</span>')
+            lines.append(f'    <span class="tv-legend-swatch" style="background:{s["color"]}"></span>')
+            lines.append(f'    <span class="tv-legend-name">{_escape_html(s["name"])}</span>')
+            lines.append(f'    <span class="tv-legend-value">{val_str}</span>')
+            lines.append(f'  </div>')
         return '\n'.join(lines)
 
+    def _pane_legend_html(self, pane_idx: int, height: int | None = None) -> str:
+        """Return a legend HTML div for the given pane index."""
+        h = f"height:{height}px;" if height is not None else ""
+        return (
+            f'<div id="l{pane_idx}" class="tv-legend" data-pane="{pane_idx}"'
+            f' style="{h}">\n'
+            f'{self._pane_legend_inner_html(pane_idx)}'
+            f'</div>'
+        )
+
+    _LEGEND_CSS = [
+        '<style>',
+        '.chart-panes {',
+        '  flex: 1; min-width: 0;',
+        '}',
+        '.chart-legends {',
+        '  width: 220px; display: flex; flex-direction: column;',
+        '  padding-left: 8px;',
+        '}',
+        '.tv-legend {',
+        '  background: rgba(17, 23, 28, 0.9);',
+        '  border: 1px solid #2A3440;',
+        '  border-radius: 6px;',
+        '  padding: 8px 12px;',
+        '  font-family: -apple-system, monospace;',
+        '  font-size: 12px;',
+        '  color: #E8ECF0;',
+        '  min-width: 180px;',
+        '  overflow-y: auto;',
+        '  margin-bottom: 4px;',
+        '}',
+        '.tv-legend:last-child { margin-bottom: 0; }',
+        '.tv-legend-header {',
+        '  font-size: 13px;',
+        '  font-weight: 600;',
+        '  margin-bottom: 6px;',
+        '  padding-bottom: 4px;',
+        '  border-bottom: 1px solid #2A3440;',
+        '}',
+        '.tv-legend-bars { font-weight: 400; color: #758696; }',
+        '.tv-legend-row {',
+        '  display: flex; align-items: center;',
+        '  gap: 6px; padding: 2px 0;',
+        '  cursor: default;',
+        '}',
+        '.tv-legend-row.hidden { opacity: 0.4; text-decoration: line-through; }',
+        '.tv-legend-eye { cursor: pointer; user-select: none; }',
+        '.tv-legend-swatch {',
+        '  display: inline-block; width: 10px; height: 10px;',
+        '  border-radius: 2px; cursor: pointer;',
+        '}',
+        '.tv-legend-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
+        '.tv-legend-value { text-align: right; color: #758696; font-variant-numeric: tabular-nums; }',
+        '</style>',
+    ]
+
     def _controls_js(self) -> str:
-        """Return an IIFE that enables interactive legend controls."""
+        """Return an IIFE that enables interactive legend controls and crosshair value tracking."""
         lines: list[str] = []
         lines.append('(function() {')
         lines.append('  var ctx = window.__chartCtx || (window.__chartCtx = {});')
+        lines.append('  ctx._chartPanes = {};')
+
+        # ── legend click handler ───────────────────────────
         lines.append('  function setupLegend(paneIdx) {')
         lines.append("    var leg = document.getElementById('l' + paneIdx);")
         lines.append('    if (!leg) return;')
@@ -459,7 +486,7 @@ class Chart:
         lines.append('        var entry = ctx[sid];')
         lines.append('        if (entry) {')
         lines.append('          entry.visible = !entry.visible;')
-        lines.append('          entry.series.setVisible(entry.visible);')
+        lines.append('          entry.series.applyOptions({ visible: entry.visible });')
         lines.append("          row.classList.toggle('hidden', !entry.visible);")
         lines.append('        }')
         lines.append('        return;')
@@ -480,23 +507,82 @@ class Chart:
         lines.append('          swatch.style.background = c;')
         lines.append('          entry.color = c;')
         lines.append('          var opts = {};')
-        lines.append('          opts[entry.colorKey] = c;')
+        lines.append('          if (entry.baseline) {')
+        lines.append('            opts.topLineColor = c;')
+        lines.append('            opts.bottomLineColor = c;')
+        lines.append('          } else {')
+        lines.append('            opts[entry.colorKey] = c;')
+        lines.append('          }')
         lines.append('          entry.series.applyOptions(opts);')
         lines.append('        });')
+        lines.append("        picker.addEventListener('blur', function() {")
+        lines.append('          if (picker.parentNode) picker.parentNode.removeChild(picker);')
+        lines.append('        });')
+        lines.append('        document.body.appendChild(picker);')
         lines.append('        picker.click();')
         lines.append('      }')
 
         lines.append('    });')
         lines.append('  }')
 
+        # ── register series and build chart-pane index ─────
+        pane_count = len(self._panes)
         for i, pane in enumerate(self._panes):
+            series_ids: list[str] = []
             if pane.candles:
                 lines.append(f"  ctx['cs{i}'] = {{ visible: true, series: cs{i} }};")
+                series_ids.append(f"cs{i}")
             for j, s in enumerate(pane.series):
                 color_key = _COLOR_OPTIONS.get(s.kind, "color")
                 sid = f"s{i}_{j}"
-                lines.append(f"  ctx['{sid}'] = {{ visible: true, series: {sid}, colorKey: '{color_key}', color: '{s.color}' }};")
+                is_base = s.kind == "baseline"
+                # Store last value for crosshair leave
+                last_v = s.data[-1].get("value") if s.data else None
+                last_repr = f"{last_v:.2f}" if last_v is not None else "''"
+                lines.append(
+                    f"  ctx['{sid}'] = {{ visible: true, series: {sid},"
+                    f" colorKey: '{color_key}', color: '{s.color}'"
+                    f"{', baseline: true' if is_base else ''}"
+                    f", _lastVal: {last_repr} }};"
+                )
+                series_ids.append(sid)
+            ids_json = json.dumps(series_ids)
+            lines.append(f"  ctx._chartPanes[{i}] = {ids_json};")
             lines.append(f"  setupLegend({i});")
+
+        # ── crosshair value tracking ───────────────────────
+        for i in range(pane_count):
+            lines.append(f'  (function(chIdx) {{')
+            lines.append('    var chart = window["chart" + chIdx];')
+            lines.append('    if (!chart) return;')
+            lines.append('    chart.subscribeCrosshairMove(function(param) {')
+            lines.append('      var ids = ctx._chartPanes[chIdx];')
+            lines.append('      if (!ids) return;')
+            lines.append('      var leg = document.getElementById("l" + chIdx);')
+            lines.append('      if (!leg) return;')
+            lines.append('      var isLeaving = !param.point || !param.time;')
+            lines.append('      ids.forEach(function(sid) {')
+            lines.append('        var entry = ctx[sid];')
+            lines.append('        if (!entry || entry.series === undefined) return;')
+            lines.append('        var row = leg.querySelector(\'[data-series="\' + sid + \'"]\');')
+            lines.append('        if (!row) return;')
+            lines.append('        var valEl = row.querySelector(".tv-legend-value");')
+            lines.append('        if (!valEl) return;')
+            lines.append('        if (isLeaving) {')
+            lines.append('          if (entry._lastVal !== undefined)')
+            lines.append('            valEl.textContent = entry._lastVal.toFixed(2);')
+            lines.append('          else valEl.textContent = "";')
+            lines.append('          return;')
+            lines.append('        }')
+            lines.append('        var data = param.seriesData.get(entry.series);')
+            lines.append('        if (data) {')
+            lines.append('          var v = data.value !== undefined ? data.value : data.close;')
+            lines.append('          if (v !== undefined)')
+            lines.append('            valEl.textContent = v.toFixed(2);')
+            lines.append('        }')
+            lines.append('      });')
+            lines.append('    });')
+            lines.append('  })(' + str(i) + ');')
 
         lines.append('})();')
         return '\n'.join(lines)
@@ -504,14 +590,25 @@ class Chart:
     def render_body(self) -> str:
         """Return chart divs + embedded script only — no <html>/<head>/<body> wrapper."""
         parts: list[str] = []
+        parts.append('<div style="display:flex;flex-direction:row">')
+        parts.append('<div class="chart-panes">')
         for i, pane in enumerate(self._panes):
             height = pane.height if pane.height else self._height
             parts.append(f'<div id="chart{i}" style="width:100%;height:{height}px"></div>')
+        parts.append('</div>')
+        parts.append('<div class="chart-legends">')
+        for i, pane in enumerate(self._panes):
+            height = pane.height if pane.height else self._height
+            parts.append(self._pane_legend_html(i, height=height))
+        parts.append('</div>')
+        parts.append('</div>')
+        parts.append('\n'.join(self._LEGEND_CSS))
         scripts: list[str] = []
         for i, pane in enumerate(self._panes):
             scripts.append(self._pane_js(i, pane))
         parts.append('<script>\n' + '\n\n'.join(scripts) + '\n</script>')
-        parts.append(self._legend_html())
+        if len(self._panes) > 1:
+            parts.append('<script>\n' + self._sync_js() + '\n</script>')
         parts.append('<script>\n' + self._controls_js() + '\n</script>')
         return '\n'.join(parts)
 
@@ -542,14 +639,15 @@ class Chart:
             msg = "Call set_candles() before adding series"
             raise ValueError(msg)
 
-        n = min(len(times), len(values))
+        n = len(times)
         data: list[dict[str, Any]] = []
         for i in range(n):
-            if values[i] is None:
-                continue
-            pt: dict[str, Any] = {"time": times[i], "value": values[i]}
-            if per_bar_colors and i < len(per_bar_colors) and per_bar_colors[i]:
-                pt["color"] = per_bar_colors[i]
+            v = values[i] if i < len(values) else None
+            pt: dict[str, Any] = {"time": times[i]}
+            if v is not None:
+                pt["value"] = v
+                if per_bar_colors and i < len(per_bar_colors) and per_bar_colors[i]:
+                    pt["color"] = per_bar_colors[i]
             data.append(pt)
 
         if not options.get("color"):
@@ -560,16 +658,41 @@ class Chart:
                 options.setdefault("topColor", color)
                 options.setdefault("bottomColor", color)
             elif kind == "baseline":
-                options.setdefault("lineColor", color)
+                options.setdefault("topLineColor", color)
+                options.setdefault("bottomLineColor", color)
             elif kind == "histogram":
                 options.setdefault("color", color)
 
         pane.series.append(_Series(kind, data, name, color, options))
 
+    def _sync_js(self) -> str:
+        """Return JS to sync time scales across multiple panes."""
+        pane_count = len(self._panes)
+        lines = [
+            '(function() {',
+            f'  var charts = [{", ".join(f"window.chart{i}" for i in range(pane_count))}];',
+            '  var syncing = false;',
+            '  function sync(range) {',
+            '    if (syncing) return;',
+            '    syncing = true;',
+            '    for (var i = 0; i < charts.length; i++) {',
+            '      var ts = charts[i].timeScale();',
+            '      ts.setVisibleLogicalRange(range);',
+            '    }',
+            '    syncing = false;',
+            '  }',
+        ]
+        for i in range(pane_count):
+            lines.append(
+                f'  window.chart{i}.timeScale().subscribeVisibleLogicalRangeChange(sync);'
+            )
+        lines.append('})();')
+        return '\n'.join(lines)
+
     def _pane_js(self, idx: int, pane: _Pane) -> str:
         lines: list[str] = [
             f'(function() {{',
-            f'  var chart = LightweightCharts.createChart(',
+            f'  var chart = window.chart{idx} = LightweightCharts.createChart(',
             f'    document.getElementById("chart{idx}"),',
             f'    {json.dumps(self._chart_options(pane))}',
             f'  );',
@@ -578,7 +701,7 @@ class Chart:
         candle_var: str | None = None
         if pane.candles:
             candle_var = f"cs{idx}"
-            lines.append(f'  var {candle_var} = chart.addSeries(LightweightCharts.CandlestickSeries, {json.dumps(_CANDLE_STYLE)});')
+            lines.append(f'  window.{candle_var} = chart.addSeries(LightweightCharts.CandlestickSeries, {json.dumps(_CANDLE_STYLE)});')
             lines.append(f'  {candle_var}.setData({json.dumps(pane.candles)});')
 
             if pane.markers:
@@ -588,7 +711,7 @@ class Chart:
             var = f"s{idx}_{j}"
             series_type = _SERIES_TYPES[s.kind]
             style = self._series_style(s)
-            lines.append(f'  var {var} = chart.addSeries(LightweightCharts.{series_type}, {json.dumps(style)});')
+            lines.append(f'  window.{var} = chart.addSeries(LightweightCharts.{series_type}, {json.dumps(style)});')
             lines.append(f'  {var}.setData({json.dumps(s.data)});')
 
         lines.append('})();')
@@ -597,7 +720,6 @@ class Chart:
     def _chart_options(self, pane: _Pane) -> dict[str, Any]:
         height = pane.height if pane.height else self._height
         base: dict[str, Any] = {
-            "width": self._width,
             "height": height,
         }
         base.update(_CHART_LAYOUT)

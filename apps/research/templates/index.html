@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Research App</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <h1 class="sidebar-title">Research</h1>
+
+    <section class="control-group">
+      <label class="control-label" for="symbol">Symbol</label>
+      <select id="symbol" class="input">
+        {% for wl in watchlists %}
+        <optgroup label="{{ wl.name }}">
+          {% for sym in wl.symbols %}
+          <option value="{{ sym }}">{{ sym }}</option>
+          {% endfor %}
+        </optgroup>
+        {% endfor %}
+      </select>
+    </section>
+
+    <section class="control-group">
+      <label class="control-label">Timeframe</label>
+      <div class="btn-group" id="timeframe-group">
+        {% for tf in timeframes %}
+        <button class="btn btn-sm {{ 'active' if tf.value == '1D' else '' }}" data-value="{{ tf.value }}">{{ tf.label }}</button>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="control-group">
+      <label class="control-label" for="bars">Bars</label>
+      <select id="bars" class="input">
+        {% for n in bar_counts %}
+        <option value="{{ n }}" {{ 'selected' if n == 500 else '' }}>{{ n }}</option>
+        {% endfor %}
+      </select>
+    </section>
+
+    <section class="control-group">
+      <label class="control-label">Indicators</label>
+      <div class="indicator-list" id="indicator-list">
+        {% for ind in indicators %}
+        <div class="indicator-item">
+          <label class="checkbox-label">
+            <input type="checkbox" class="indicator-check" data-id="{{ ind.id }}">
+            <span>{{ ind.name }}</span>
+          </label>
+          <div class="indicator-params" id="params-{{ ind.id }}" style="display:none">
+            {% for p in ind.params %}
+            <div class="param-row">
+              <span class="param-label">{{ p.label }}</span>
+              <input
+                type="{{ 'number' if p.type in ('int','float') else 'text' }}"
+                class="param-input input input-sm"
+                data-indicator="{{ ind.id }}"
+                data-param="{{ p.name }}"
+                value="{{ p.default }}"
+                min="{{ p.get('min','') }}"
+                step="{{ '0.1' if p.type == 'float' else '1' }}"
+              >
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <button class="btn btn-primary" id="update-btn">Update Chart</button>
+  </aside>
+
+  <main class="main">
+    <div class="chart-container">
+      <iframe id="chart-frame" class="chart-frame" loading="lazy"></iframe>
+    </div>
+    <div class="status-bar" id="status-bar">Select a symbol and click Update Chart</div>
+  </main>
+</div>
+
+<script>
+const frame = document.getElementById('chart-frame');
+const statusBar = document.getElementById('status-bar');
+const updateBtn = document.getElementById('update-btn');
+const symbolEl = document.getElementById('symbol');
+const barsEl = document.getElementById('bars');
+const indicatorList = document.getElementById('indicator-list');
+const timeframeGroup = document.getElementById('timeframe-group');
+
+let selectedTimeframe = '1D';
+
+timeframeGroup.addEventListener('click', (e) => {
+  const btn = e.target.closest('.btn');
+  if (!btn || !btn.dataset.value) return;
+  timeframeGroup.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  selectedTimeframe = btn.dataset.value;
+});
+
+indicatorList.addEventListener('change', (e) => {
+  if (!e.target.classList.contains('indicator-check')) return;
+  const params = document.getElementById('params-' + e.target.dataset.id);
+  params.style.display = e.target.checked ? 'block' : 'none';
+});
+
+async function updateChart() {
+  const indicators = {};
+  document.querySelectorAll('.indicator-check:checked').forEach(cb => {
+    const id = cb.dataset.id;
+    const params = {};
+    document.querySelectorAll(`.param-input[data-indicator="${id}"]`).forEach(inp => {
+      const val = inp.type === 'number' ? parseFloat(inp.value) : inp.value;
+      params[inp.dataset.param] = val;
+    });
+    indicators[id] = params;
+  });
+
+  const formData = new FormData();
+  formData.append('symbol', symbolEl.value);
+  formData.append('timeframe', selectedTimeframe);
+  formData.append('bars_count', barsEl.value);
+  formData.append('indicators_json', JSON.stringify(indicators));
+
+  statusBar.textContent = 'Loading...';
+
+  try {
+    const resp = await fetch('/api/chart', { method: 'POST', body: formData });
+    const data = await resp.json();
+    frame.srcdoc = data.chart_html;
+    statusBar.textContent = `${data.bars_count} bars loaded`;
+  } catch (err) {
+    statusBar.textContent = 'Error: ' + err.message;
+  }
+}
+
+updateBtn.addEventListener('click', updateChart);
+
+frame.addEventListener('load', () => {
+  statusBar.textContent = statusBar.textContent.replace('Loading...', 'Chart ready');
+});
+
+updateChart();
+</script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+bundle:
+  name: pytvtools-research
+
+resources:
+  apps:
+    research:
+      name: research
+      source_code_path: .
+      config:
+        command:
+          - python
+          - app.py
+        env:
+          - name: DATABRICKS_WAREHOUSE_ID
+            valueFrom: sql-warehouse
+      permissions:
+        - service_principal_name: ${bundle.target}.research
+          level: CAN_MANAGE
+
+targets:
+  dev:
+    default: true

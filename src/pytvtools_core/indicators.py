@@ -33,21 +33,25 @@ def _prices(data: list[float] | list[OHLCVBar]) -> list[float]:
         return []
     if isinstance(data[0], dict):
         return [d["close"] for d in data]  # type: ignore[misc]
-    return [float(d) for d in data]  # type: ignore[misc]
+    return [float(d) if d is not None else None for d in data]  # type: ignore[misc]
 
 
 def sma(data: list[float] | list[OHLCVBar], period: int = 20) -> list[float | None]:
     """Simple Moving Average.
 
     Returns a list the same length as *data*; the first ``period - 1``
-    values are ``None``.
+    values are ``None``. ``None`` inputs are propagated.
     """
     prices = _prices(data)
     if len(prices) < period:
         return [None] * len(prices)
     result: list[float | None] = [None] * (period - 1)
     for i in range(period - 1, len(prices)):
-        result.append(sum(prices[i - period + 1 : i + 1]) / period)
+        window = prices[i - period + 1 : i + 1]
+        if any(v is None for v in window):
+            result.append(None)
+        else:
+            result.append(sum(window) / period)  # type: ignore[arg-type]
     return result
 
 

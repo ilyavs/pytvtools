@@ -175,7 +175,7 @@ class TestAddSeries:
         assert len(pane.series) == 1
         assert pane.series[0].kind == "line"
         assert pane.series[0].name == "SMA 20"
-        assert len(pane.series[0].data) == 8  # None values filtered out
+        assert len(pane.series[0].data) == 10  # None values kept for x-axis alignment
 
     def test_add_line_errors_without_candles(self):
         chart = Chart()
@@ -224,17 +224,21 @@ class TestAddSeries:
             base_value=50,
         )
         assert chart._panes[0].series[0].kind == "baseline"
-        assert chart._panes[0].series[0].options["baseValue"] == 50.0
+        assert chart._panes[0].series[0].options["baseValue"] == {"type": "price", "price": 50.0}
 
-    def test_none_values_filtered(self):
+    def test_none_values_kept_for_x_axis(self):
         chart = Chart()
         chart.set_candles(sample_bars(5))
         vals = [None, 101.0, None, 103.0, 104.0]
         chart.add_line(vals)
         data = chart._panes[0].series[0].data
-        assert len(data) == 3
-        for pt in data:
-            assert "value" in pt
+        assert len(data) == 5
+        has_value = sum(1 for pt in data if "value" in pt)
+        assert has_value == 3
+        missing = [pt for pt in data if "value" not in pt]
+        assert len(missing) == 2
+        for pt in missing:
+            assert "time" in pt
 
     def test_exact_time_alignment(self):
         chart = Chart()
@@ -243,9 +247,15 @@ class TestAddSeries:
         # Add half the length — should only align first entries
         chart.add_line([100.0, 101.0])
         data = chart._panes[0].series[0].data
-        assert len(data) == 2
+        assert len(data) == 5
         assert data[0]["time"] == "2024-01-02"
+        assert data[0]["value"] == 100.0
         assert data[1]["time"] == "2024-01-03"
+        assert data[1]["value"] == 101.0
+        # Remaining entries have no value (padded for x-axis alignment)
+        assert "value" not in data[2]
+        assert "value" not in data[3]
+        assert "value" not in data[4]
 
 
 # ── markers ──────────────────────────────────────────────────────────
@@ -433,14 +443,14 @@ class TestLegendRenderBody:
         chart.set_candles(sample_bars(5))
         chart.add_line([1, 2, 3], name="L")
         html = chart.render()
-        assert "setVisible" in html
+        assert "applyOptions" in html
         assert "applyOptions" in html
 
     def test_controls_body_has_js(self):
         chart = Chart()
         chart.set_candles(sample_bars(5))
         body = chart.render_body()
-        assert "setVisible" in body
+        assert "applyOptions" in body
 
     def test_controls_ctx_registers_series(self):
         chart = Chart()
@@ -458,3 +468,51 @@ class TestLegendRenderBody:
         chart.add_line([1, 2, 3], name="L1")
         html = chart.render()
         assert 'data-series="s0_0"' in html
+
+    def test_legend_inside_pane_wrap(self):
+        chart = Chart()
+        chart.set_candles(sample_bars(5))
+        html = chart.render()
+        assert 'tv-legend' in html
+        assert 'id="l0"' in html
+
+    def test_multi_pane_legend_per_pane(self):
+        chart = Chart()
+        chart.set_candles(sample_bars(10))
+        p1 = chart.add_pane(height=100)
+        chart.add_line([1, 2, 3], name="A", pane=p1)
+        html = chart.render()
+        assert 'id="l0"' in html
+        assert 'id="l1"' in html
+        assert 'chart-wrap' in html
+
+    def test_color_picker_appended_to_dom(self):
+        chart = Chart()
+        chart.set_candles(sample_bars(5))
+        chart.add_line([1, 2], name="L")
+        html = chart.render()
+        assert "appendChild(picker)" in html
+        assert "removeChild(picker)" in html
+        assert "picker.click()" in html
+
+    def test_series_vars_are_global(self):
+        chart = Chart()
+        chart.set_candles(sample_bars(5))
+        chart.add_line([1, 2], name="L1")
+        html = chart.render()
+        assert "window.cs0" in html
+        assert "window.s0_0" in html
+        assert "window.chart0" in html
+
+    def test_ctx_uses_correct_color_key(self):
+        chart = Chart()
+        chart.set_candles(sample_bars(5))
+        chart.add_line([1, 2], name="L")
+        chart.add_area([1, 2], name="A")
+        chart.add_histogram([1, 2], name="H")
+        chart.add_baseline([1, 2], name="B", base_value=50)
+        html = chart.render()
+        assert "colorKey: 'color'" in html  # line
+        assert "colorKey: 'lineColor'" in html  # area
+        assert "colorKey: 'color'" in html  # histogram
+        assert "colorKey: 'lineColor'" in html  # baseline
