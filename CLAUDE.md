@@ -16,12 +16,16 @@ Two packages in one repo:
 
 The core package is standalone — synced to [pytvtools-core](https://github.com/ilyavs/pytvtools-core) via `python scripts/sync_core.py`. The Databricks workspace has a git folder at `/Users/sl.ilya1987@gmail.com/pytvtools-core/` linked to that repo — workspace jobs pull source from there.
 
+> **GitHub branch is `main`, NOT `master`.** The remote `ilyavs/pytvtools-core` uses `main` as its default branch. A local branch named `master` (created by `git init` or a stale clone) is **divergent and NOT the deployment branch** — never push `master` expecting it to deploy. The sync cursor is the actual local folder `/home/ilya/github/pytvtools-core-public`, whose `origin` already points at `ilyavs/pytvtools-core`. Always checkout / PR against `main`.
+
 **Push workflow (never upload files manually):**
 
-    python scripts/sync_core.py ../pytvtools-core --commit "msg"
-    git -C ../pytvtools-core push
+    python scripts/sync_core.py ../pytvtools-core-public --commit "msg"
+    git -C ../pytvtools-core-public push
 
 This copies `src/pytvtools_core/`, `tests/`, and `notebooks/` to the standalone repo, commits, then push to GitHub. The Databricks workspace auto-syncs from the git folder.
+
+**Pipeline jobs.** The Databricks `cache_refresh_{daily,weekly,monthly}` jobs run from a git checkout of `ilyavs/pytvtools-core` branch `main` (`source: GIT`, `notebook_path: notebooks/cache_refresh`). Their `jobs/*.json` templates in this repo are the source of truth — if a job ever fails at checkout with `UNAUTHENTICATED: No Git credential configured`, check the job's `git_source` points at `https://github.com/ilyavs/pytvtools-core` on branch `main` (a common regression is `...-public` @ `master`, a repo that does not exist). The on-demand job uses a workspace notebook and has no `git_source`.
 
 **IMPORTANT — workspace sync does NOT happen automatically.** After pushing to GitHub, force-sync the workspace git folder via SDK (it's a Databricks Repo, `ObjectType.REPO`, not a plain Workspace Git Folder):
 
