@@ -72,7 +72,7 @@ else:
     elif watchlist:
         wl = get_sp500() if watchlist == "SP500" else get_watchlist(watchlist)
         symbols = sorted(wl.symbols)
-        label = f"watchlist={watchlist} ({len(symbols)} symbols)"
+        label = f"watchlist={watchlist} ({len(symbols)} symbols, registry missing/empty)"
     else:
         wl = get_sp500()
         symbols = sorted(wl.symbols)
