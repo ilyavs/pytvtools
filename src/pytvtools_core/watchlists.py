@@ -391,3 +391,20 @@ def get_watchlist(name: str) -> Watchlist:
     if name not in WATCHLISTS:
         raise KeyError(f"Unknown watchlist: {name}. Choices: {', '.join(sorted(WATCHLISTS))}")
     return WATCHLISTS[name]
+
+
+def registry_rows(sp500: Watchlist | None = None) -> list[dict[str, str]]:
+    """Build one (symbol, watchlist, source) entry per symbol per watchlist.
+
+    Static ``WATCHLISTS`` entries get ``source="watchlist"``; the S&P 500 gets
+    ``source="sp500"`` with ``watchlist="SP500"``.  Pass ``sp500`` explicitly
+    to avoid the network/pandas load of ``get_sp500()`` (used in Databricks).
+    """
+    wl = sp500 if sp500 is not None else get_sp500()
+    rows: list[dict[str, str]] = []
+    for name, watch in WATCHLISTS.items():
+        for sym in watch.symbols:
+            rows.append({"symbol": sym, "watchlist": name, "source": "watchlist"})
+    for sym in wl.symbols:
+        rows.append({"symbol": sym, "watchlist": "SP500", "source": "sp500"})
+    return rows

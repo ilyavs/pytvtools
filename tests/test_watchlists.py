@@ -140,3 +140,39 @@ class TestNewWatchlists:
         for sym in ("AMEX:URA", "AMEX:URNM", "AMEX:REMX", "AMEX:SLX",
                      "CCJ", "DNN", "NXE", "LYC"):
             assert sym in URANIUM_STRATEGIC
+
+
+from pytvtools_core.watchlists import registry_rows, Watchlist
+
+
+class TestRegistryRows:
+    def test_includes_static_watchlists(self):
+        rows = registry_rows(sp500=Watchlist("S&P 500", ("FAKESP",)))
+        syms = {r["symbol"] for r in rows}
+        assert "XLK" in syms
+        assert "TVC:US10Y" in syms
+        assert "AMEX:URA" in syms
+
+    def test_static_rows_use_watchlist_source(self):
+        rows = registry_rows(sp500=Watchlist("S&P 500", ("FAKESP",)))
+        xlk = [r for r in rows if r["symbol"] == "XLK" and r["watchlist"] == "SPDR_SECTORS"]
+        assert len(xlk) == 1
+        assert xlk[0]["watchlist"] == "SPDR_SECTORS"
+        assert xlk[0]["source"] == "watchlist"
+
+    def test_sp500_rows_use_sp500_source(self):
+        rows = registry_rows(sp500=Watchlist("S&P 500", ("AAA", "CCC")))
+        sp = [r for r in rows if r["source"] == "sp500"]
+        assert {r["symbol"] for r in sp} == {"AAA", "CCC"}
+        assert all(r["watchlist"] == "SP500" for r in sp)
+
+    def test_symbol_in_multiple_watchlists_has_multiple_rows(self):
+        rows = registry_rows(sp500=Watchlist("S&P 500", ("SLX",)))
+        slx = [r for r in rows if r["symbol"] == "SLX"]
+        assert {r["watchlist"] for r in slx} == {
+            "SPDR_INDUSTRIES", "SPDR_ALL", "SP500"}
+        assert len(slx) >= 3
+
+    def test_returns_plain_dicts(self):
+        rows = registry_rows(sp500=Watchlist("S&P 500", ("FAKESP",)))
+        assert set(rows[0]) == {"symbol", "watchlist", "source"}
