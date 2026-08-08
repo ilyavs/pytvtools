@@ -44,24 +44,39 @@ assert mode in ("incremental", "backfill"), f"Invalid mode: {mode}"
 
 # COMMAND ----------
 
+from pytvtools_core.cache import _CATALOG, _SCHEMA
+REGISTRY_TABLE = f"{_CATALOG}.{_SCHEMA}.symbol_registry"
+
 if symbol:
     symbols = [symbol]
     label = f"single={symbol}"
-elif watchlist:
-    if watchlist == "SP500":
-        from pytvtools_core.watchlists import get_sp500
-        wl = get_sp500()
-    else:
-        from pytvtools_core.watchlists import get_watchlist
-        wl = get_watchlist(watchlist)
-    symbols = sorted(wl.symbols)
-    label = f"watchlist={watchlist} ({len(symbols)} symbols)"
 else:
-    # Default: S&P 500
-    from pytvtools_core.watchlists import get_sp500
-    wl = get_sp500()
-    symbols = sorted(wl.symbols)
-    label = f"S&P 500 batch ({len(symbols)} symbols)"
+    try:
+        from pytvtools_core.watchlists import get_sp500, get_watchlist
+    except ImportError:
+        get_sp500, get_watchlist = None, None
+
+    # Prefer the symbol registry when present; fall back to code resolution.
+    try:
+        n = spark.sql(f"SELECT COUNT(*) AS n FROM {REGISTRY_TABLE}").collect()[0]["n"]
+    except Exception:
+        n = 0
+
+    if n > 0:
+        where = f" WHERE watchlist = '{watchlist}'" if watchlist else ""
+        rows = spark.sql(
+            f"SELECT DISTINCT symbol FROM {REGISTRY_TABLE}{where} ORDER BY symbol"
+        ).collect()
+        symbols = [r["symbol"] for r in rows]
+        label = f"registry={watchlist or 'all'} ({len(symbols)} symbols)"
+    elif watchlist:
+        wl = get_sp500() if watchlist == "SP500" else get_watchlist(watchlist)
+        symbols = sorted(wl.symbols)
+        label = f"watchlist={watchlist} ({len(symbols)} symbols)"
+    else:
+        wl = get_sp500()
+        symbols = sorted(wl.symbols)
+        label = f"S&P 500 batch (registry missing/empty; {len(symbols)} symbols)"
 
 print(f"Refreshing cache: timeframe={timeframe}, mode={mode}, {label}")
 
