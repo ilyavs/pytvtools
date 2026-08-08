@@ -24,6 +24,7 @@ CORE_TESTS = [
 
 CORE_NOTEBOOKS = [
     REPO_ROOT / "notebooks" / "cache_refresh.py",
+    REPO_ROOT / "notebooks" / "cache_registry.py",
     REPO_ROOT / "notebooks" / "stress_test_tvdata_limits.py",
 ]
 
