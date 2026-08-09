@@ -494,3 +494,44 @@ def screen(
             break
         offset += page_size
     return rows, total
+
+
+US_STOCK_EXCHANGES: tuple[str, ...] = ("NYSE", "NASDAQ", "AMEX")
+
+_US_STOCKS_CACHE: Watchlist | None = None
+
+
+def us_stock_rows(
+    market: str = "america",
+    exchanges: tuple[str, ...] = US_STOCK_EXCHANGES,
+) -> list[dict[str, str]]:
+    """One (symbol, US_STOCKS, screen) entry per listed US stock.
+
+    Queries the TradingView scanner per exchange and unions the results.
+    Symbols are already exchange-prefixed (``NYSE:A``), matching the
+    format the cache/refresh path consumes.
+    """
+    rows: list[dict[str, str]] = []
+    for exch in exchanges:
+        screen_rows, _ = screen(market=market, exchange=exch)
+        for r in screen_rows:
+            rows.append({
+                "symbol": str(r["symbol"]),
+                "watchlist": "US_STOCKS",
+                "source": "screen",
+            })
+    return rows
+
+
+def get_us_stocks(*, force_refetch: bool = False) -> Watchlist:
+    """Return a Watchlist of all listed US stocks (mirrors get_sp500).
+
+    Cached in memory for process lifetime.  Raises on failure — unlike
+    S&P 500 there is no static fallback snapshot for the whole market.
+    """
+    global _US_STOCKS_CACHE
+    if _US_STOCKS_CACHE is not None and not force_refetch:
+        return _US_STOCKS_CACHE
+    symbols = tuple(r["symbol"] for r in us_stock_rows())
+    _US_STOCKS_CACHE = Watchlist(name="US Stocks", symbols=symbols)
+    return _US_STOCKS_CACHE

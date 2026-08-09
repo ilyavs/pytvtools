@@ -21,6 +21,8 @@ from pytvtools_core.watchlists import (
     WATCHLISTS,
     screen,
     get_watchlist,
+    us_stock_rows,
+    get_us_stocks,
 )
 
 
@@ -251,3 +253,58 @@ class TestScreen:
         assert [r["symbol"] for r in rows] == ["NYSE:A", "NYSE:AB", "NYSE:ABT"]
         assert total == 3
         assert seen_ranges == [[0, 2], [2, 4]]
+
+
+class TestUSStocks:
+    @staticmethod
+    def _fake_urlopen(responses):
+        seq = iter(responses)
+
+        def _open(req, timeout=None):
+            return io.BytesIO(json.dumps(next(seq)).encode())
+
+        return _open
+
+    def test_us_stock_rows_unions_exchanges(self):
+        responses = [
+            {"totalCount": 2, "data": [{"s": "NYSE:A", "d": ["A"]},
+                                      {"s": "NYSE:B", "d": ["B"]}]},
+            {"totalCount": 1, "data": [{"s": "NASDAQ:COST", "d": ["COST"]}]},
+            {"totalCount": 0, "data": []},
+        ]
+        with mock.patch("urllib.request.urlopen",
+                        side_effect=self._fake_urlopen(responses)):
+            rows = us_stock_rows(exchanges=("NYSE", "NASDAQ", "AMEX"))
+        assert [r["symbol"] for r in rows] == ["NYSE:A", "NYSE:B", "NASDAQ:COST"]
+        for r in rows:
+            assert set(r) == {"symbol", "watchlist", "source"}
+            assert r["watchlist"] == "US_STOCKS"
+            assert r["source"] == "screen"
+
+    def test_us_stock_rows_sends_exchange_filter_per_call(self):
+        seen = []
+
+        def _open(req, timeout=None):
+            body = json.loads(req.data.decode())
+            seen.append(body["filter"])
+            return io.BytesIO(json.dumps({"totalCount": 1, "data": [
+                {"s": "NASDAQ:T", "d": ["T"]}]}).encode())
+
+        with mock.patch("urllib.request.urlopen", side_effect=_open):
+            rows = us_stock_rows(exchanges=("NASDAQ",))
+        assert seen == [[{"left": "exchange", "operation": "equal",
+                          "right": "NASDAQ"}]]
+        assert rows[0]["symbol"] == "NASDAQ:T"
+
+    def test_get_us_stocks_returns_prefixed_watchlist(self):
+        # get_us_stocks() calls us_stock_rows() -> one scanner call per exchange
+        responses = [
+            {"totalCount": 1, "data": [{"s": "NYSE:XOM", "d": ["XOM"]}]},
+            {"totalCount": 0, "data": []},  # NASDAQ
+            {"totalCount": 0, "data": []},  # AMEX
+        ]
+        with mock.patch("urllib.request.urlopen",
+                        side_effect=self._fake_urlopen(responses)):
+            wl = get_us_stocks()
+        assert wl.name == "US Stocks"
+        assert wl.symbols == ("NYSE:XOM",)
