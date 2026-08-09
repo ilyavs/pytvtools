@@ -275,6 +275,7 @@ INDEX_CFDS = Watchlist(
         "EURONEXT:PX1",
         "TVC:NI225",
         "TVC:HSI",
+        "TVC:VIX",
     ),
 )
 

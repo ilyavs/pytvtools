@@ -60,7 +60,7 @@ class TestNewWatchlists:
         assert len(INDEX_FUTURES) == 6
 
     def test_index_cfds_len(self):
-        assert len(INDEX_CFDS) == 9
+        assert len(INDEX_CFDS) == 10
 
     def test_index_etfs_len(self):
         assert len(INDEX_ETFS) == 6
@@ -120,6 +120,7 @@ class TestNewWatchlists:
         assert "TVC:RUT" in INDEX_CFDS
         assert "TVC:DAX" in INDEX_CFDS
         assert "TVC:NI225" in INDEX_CFDS
+        assert "TVC:VIX" in INDEX_CFDS
 
     def test_index_etfs_content(self):
         for sym in ("AMEX:SPY", "NASDAQ:QQQ", "AMEX:IWM", "AMEX:DIA",
