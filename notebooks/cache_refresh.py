@@ -15,7 +15,7 @@
 # MAGIC
 # MAGIC **Available watchlists**: SPDR_SECTORS, SPDR_INDUSTRIES, SPDR_ALL, CRYPTO,
 # MAGIC METALS_MINERS, INDEX_FUTURES, INDEX_CFDS, INDEX_ETFS, BONDS, OIL,
-# MAGIC URANIUM_STRATEGIC.  Pass `"SP500"` for S&P 500 (fetched live from Wikipedia).
+# MAGIC URANIUM_STRATEGIC, US_STOCKS.  Pass `"SP500"` for S&P 500 (fetched live from Wikipedia).
 
 # COMMAND ----------
 
@@ -33,6 +33,7 @@ dbutils.widgets.text("timeframe", "1D")
 dbutils.widgets.text("watchlist", "")
 dbutils.widgets.text("symbol", "")
 dbutils.widgets.text("mode", "incremental")
+dbutils.widgets.text("concurrency", "1")
 
 timeframe = dbutils.widgets.get("timeframe")
 assert timeframe in ("1D", "1W", "1M"), f"Invalid timeframe: {timeframe}"
@@ -41,6 +42,8 @@ watchlist = dbutils.widgets.get("watchlist") or None
 symbol = dbutils.widgets.get("symbol") or None
 mode = dbutils.widgets.get("mode")
 assert mode in ("incremental", "backfill"), f"Invalid mode: {mode}"
+
+concurrency = max(1, int(dbutils.widgets.get("concurrency")))
 
 # COMMAND ----------
 
@@ -52,9 +55,9 @@ if symbol:
     label = f"single={symbol}"
 else:
     try:
-        from pytvtools_core.watchlists import get_sp500, get_watchlist
+        from pytvtools_core.watchlists import get_sp500, get_watchlist, get_us_stocks
     except ImportError:
-        get_sp500, get_watchlist = None, None
+        get_sp500, get_watchlist, get_us_stocks = None, None, None
 
     # Prefer the symbol registry when present; fall back to code resolution.
     try:
@@ -70,7 +73,12 @@ else:
         symbols = [r["symbol"] for r in rows]
         label = f"registry={watchlist or 'all'} ({len(symbols)} symbols)"
     elif watchlist:
-        wl = get_sp500() if watchlist == "SP500" else get_watchlist(watchlist)
+        if watchlist == "SP500":
+            wl = get_sp500()
+        elif watchlist == "US_STOCKS":
+            wl = get_us_stocks()
+        else:
+            wl = get_watchlist(watchlist)
         symbols = sorted(wl.symbols)
         label = f"watchlist={watchlist} ({len(symbols)} symbols, registry missing/empty)"
     else:
@@ -97,14 +105,14 @@ import secrets as _sec
 
 if mode == "backfill":
     BATCH_SIZE = 1 if is_single else 5
-    MAX_CONCURRENT = 1 if is_single else 1
+    MAX_CONCURRENT = concurrency
     CHUNK_SIZE = 4000
     refresh_func = cache.refresh_multi_all
     refresh_kwargs = {"chunk_size": CHUNK_SIZE, "max_concurrent": MAX_CONCURRENT}
     print(f"Using paginated backfill: chunk_size={CHUNK_SIZE}, batch={BATCH_SIZE}, concurrency={MAX_CONCURRENT}")
 else:
     BATCH_SIZE = 1 if is_single else 10
-    MAX_CONCURRENT = 1 if is_single else 1
+    MAX_CONCURRENT = concurrency
     BARS_COUNT = 500 if is_single else 2000
     refresh_func = cache.refresh_multi
     refresh_kwargs = {"bars_count": BARS_COUNT, "max_concurrent": MAX_CONCURRENT}
