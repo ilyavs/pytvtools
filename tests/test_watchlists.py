@@ -1,5 +1,9 @@
 """Tests for watchlists.py — predefined watchlist library."""
 
+import io
+import json
+from unittest import mock
+
 import pytest
 
 from pytvtools_core.watchlists import (
@@ -15,6 +19,7 @@ from pytvtools_core.watchlists import (
     OIL,
     URANIUM_STRATEGIC,
     WATCHLISTS,
+    screen,
     get_watchlist,
 )
 
@@ -177,3 +182,72 @@ class TestRegistryRows:
     def test_returns_plain_dicts(self):
         rows = registry_rows(sp500=Watchlist("S&P 500", ("FAKESP",)))
         assert set(rows[0]) == {"symbol", "watchlist", "source"}
+
+
+class TestScreen:
+    """screen() queries TradingView's scanner API and returns rows + total."""
+
+    URL = "https://scanner.tradingview.com/america/scan"
+
+    @staticmethod
+    def _fake_urlopen(responses):
+        seq = iter(responses)
+
+        def _open(req, timeout=None):
+            return io.BytesIO(json.dumps(next(seq)).encode())
+
+        return _open
+
+    def test_returns_rows_and_total(self):
+        resp = {
+            "totalCount": 2,
+            "data": [
+                {"s": "NYSE:A", "d": ["A", 145.97]},
+                {"s": "NYSE:AA", "d": ["AA", 50.17]},
+            ],
+        }
+        with mock.patch("urllib.request.urlopen", side_effect=self._fake_urlopen([resp])):
+            rows, total = screen(columns=("name", "close"))
+        assert total == 2
+        assert rows == [
+            {"symbol": "NYSE:A", "name": "A", "close": 145.97},
+            {"symbol": "NYSE:AA", "name": "AA", "close": 50.17},
+        ]
+
+    def test_sends_exchange_filter_and_types(self):
+        seen = {}
+
+        def _open(req, timeout=None):
+            seen["url"] = req.full_url
+            seen["data"] = json.loads(req.data.decode())
+            return io.BytesIO(json.dumps({"totalCount": 0, "data": []}).encode())
+
+        with mock.patch("urllib.request.urlopen", side_effect=_open):
+            screen(exchange="NYSE")
+        assert seen["url"] == TestScreen.URL
+        assert seen["data"]["symbols"] == {"query": {"types": ["stock"]}}
+        assert seen["data"]["filter"] == [
+            {"left": "exchange", "operation": "equal", "right": "NYSE"}
+        ]
+
+    def test_paginates_until_all_fetched(self):
+        dataset = ["A", "AB", "ABT"]
+        seen_ranges = []
+
+        def _open(req, timeout=None):
+            body = json.loads(req.data.decode())
+            start, end = body["range"]
+            seen_ranges.append([start, end])
+            page = [
+                {"s": f"NYSE:{s}", "d": [s]}
+                for s in dataset[start:end]
+            ]
+            return io.BytesIO(
+                json.dumps({"totalCount": len(dataset), "data": page}).encode()
+            )
+
+        with mock.patch("urllib.request.urlopen", side_effect=_open):
+            rows, total = screen(columns=("name",), page_size=2)
+        assert [r["symbol"] for r in rows] == ["NYSE:A", "NYSE:AB", "NYSE:ABT"]
+        assert total == 3
+        assert seen_ranges == [[0, 2], [2, 4]]

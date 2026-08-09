@@ -16,7 +16,13 @@ immutable ``symbols`` tuple.  Use them directly with ``Collector``::
 from __future__ import annotations
 
 import dataclasses
+import json
+import urllib.error
+import urllib.request
 from typing import Iterator
+
+_SCANNER_URL = "https://scanner.tradingview.com/{market}/scan"
+_PAGE_SIZE = 100
 
 
 @dataclasses.dataclass(frozen=True)
@@ -409,3 +415,82 @@ def registry_rows(sp500: Watchlist | None = None) -> list[dict[str, str]]:
     for sym in wl.symbols:
         rows.append({"symbol": sym, "watchlist": "SP500", "source": "sp500"})
     return rows
+
+
+def screen(
+    market: str = "america",
+    exchange: str | None = None,
+    types: tuple[str, ...] = ("stock",),
+    columns: tuple[str, ...] = ("name",),
+    page_size: int = _PAGE_SIZE,
+    timeout: float = 30.0,
+) -> tuple[list[dict[str, object]], int]:
+    """Query TradingView's stock-screener endpoint.
+
+    Returns ``(rows, total_count)`` where each row is a dict, e.g.
+    ``{"symbol": "NYSE:A", "name": "A", "close": 145.97}``.  Paginates
+    internally through the full result set.
+
+    Parameters
+    ----------
+    market : str
+        Scanner market, e.g. ``"america"``, ``"crypto"``, ``"forex"``.
+    exchange : str | None
+        If given, only return symbols from this exchange (e.g. ``"NYSE"``,
+        ``"NASDAQ"``, ``"AMEX"``).  None returns every market symbol.
+    types : tuple[str, ...]
+        Instrument types to include, e.g. ``("stock",)``.
+    columns : tuple[str, ...]
+        Screen columns to fetch per row, e.g. ``("name", "close")``.  The
+        symbol itself is always present as the ``"symbol"`` key.
+    timeout : float
+        Seconds to wait for the server response.
+    """
+    rows: list[dict[str, object]] = []
+    total: int | None = None
+    offset = 0
+    while True:
+        payload: dict[str, object] = {
+            "symbols": {"query": {"types": list(types)}},
+            "columns": list(columns),
+            "range": [offset, offset + page_size],
+        }
+        if exchange:
+            payload["filter"] = [
+                {"left": "exchange", "operation": "equal", "right": exchange}
+            ]
+
+        body = json.dumps(payload).encode()
+        req = urllib.request.Request(
+            _SCANNER_URL.format(market=market),
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 "
+                "Safari/537.36",
+                "Referer": "https://www.tradingview.com/screener/",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode())
+        except urllib.error.HTTPError as err:
+            reason = f": {err.reason}" if err.reason else ""
+            raise RuntimeError(
+                f"screen({market!r}) failed: HTTP {err.code}{reason}"
+            ) from err
+        except urllib.error.URLError as err:
+            raise RuntimeError(f"screen({market!r}) failed: {err.reason}") from err
+
+        total = int(data["totalCount"])
+        batch = data.get("data", [])
+        for item in batch:
+            row: dict[str, object] = {"symbol": item["s"]}
+            row.update(zip(columns, item.get("d", [])))
+            rows.append(row)
+        if not batch or offset + page_size >= total:
+            break
+        offset += page_size
+    return rows, total

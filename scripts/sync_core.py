@@ -93,6 +93,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+pythonpath = ["src"]
 """, encoding="utf-8")
     print(f"Generated {core_pp}")
 
