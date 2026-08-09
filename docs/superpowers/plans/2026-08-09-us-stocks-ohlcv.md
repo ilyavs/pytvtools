@@ -162,6 +162,79 @@ git commit -m "feat(core): add us_stock_rows() and get_us_stocks() from TradingV
 
 ---
 
+### Task 1A (amend, discovered at Task 7 execution): stable `sort` in `screen()` pagination
+
+**Files:**
+- Modify: `src/pytvtools_core/watchlists.py` (the `screen()` function — add a `sort_by` parameter and include a `sort` block in the payload)
+- Test: `tests/test_watchlists.py` (extend/add directly; a `TestScreenSort` class or assertion on the `screen` payloads)
+
+**Why:** Task 7's registry run fetched only 3773/5701 distinct US symbols. Root cause: TradingView's scanner default order is **not stable across page requests**, so the `range [offset, offset+page_size]` pagination in `screen()` drifts — duplicates and missing symbols. Verified live: with no `sort`, the first page returns `['NYSE:DHI','NYSE:KEYS','NYSE:PRKS']` but with `sort {"sortBy":"name","sortOrder":"asc"}` it returns `['NYSE:A','NYSE:AA','NYSE:AADX']`, and a full paginated scan with `sortBy: name` gives **exact** counts: NYSE 2127, NASDAQ 3321, AMEX 253 (all distinct = 5701).
+
+- [ ] **Step 1: Write the failing test**
+
+In `tests/test_watchlists.py` add a test that asserts `screen()` sends a stable `sort` in the payload. It can reuse the existing mocked `urlopen` pattern from `TestScreen`:
+
+```python
+def test_screen_sends_stable_sort(self):
+    seen = {}
+
+    def _open(req, timeout=None):
+        body = json.loads(req.data.decode())
+        seen["sort"] = body.get("sort")
+        seen["filter"] = body.get("filter")
+        return io.BytesIO(json.dumps(
+            {"totalCount": 1, "data": [{"s": "NYSE:A", "d": ["A"]}]}).encode())
+
+    with mock.patch("urllib.request.urlopen", side_effect=_open):
+        screen(exchange="NYSE")
+    assert seen["filter"] == [{"left": "exchange", "operation": "equal",
+                               "right": "NYSE"}]
+    assert seen["sort"] == {"sortBy": "name", "sortOrder": "asc"}
+```
+
+Also extend `TestUSStocks.test_us_stock_rows_sends_exchange_filter_per_call` to assert the `sort` key is present in each request body (optional but cheap).
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `python3 -m pytest tests/test_watchlists.py -q`
+Expected: the new sort test FAILS (payload has no `sort` key); existing tests pass.
+
+- [ ] **Step 3: Modify `screen()`**
+
+Add a `sort_by: str | None = "name"` parameter to `screen(...)` and insert the sort block into `payload` before `range`:
+
+```python
+        payload: dict[str, object] = {
+            "symbols": {"query": {"types": list(types)}},
+            "columns": list(columns),
+        }
+        if sort_by:
+            payload["sort"] = {"sortBy": sort_by, "sortOrder": "asc"}
+        payload["range"] = [offset, offset + page_size]
+```
+
+Docstring: note that a stable sort (rising or default `"name"`) is required for correct pagination; `sort_by=None` disables it only for callers who know the server returns a stable order.
+
+- [ ] **Step 4: Run the full suite**
+
+Run: `python3 -m pytest tests/test_watchlists.py -q`
+Expected: PASS (38 passed — 37 existing + 1 new). Output pristine.
+
+- [ ] **Step 5: Live spot-check (optional but recommended)**
+
+Run the full-paginated scan with `sortBy: name` for NYSE/NASDAQ/AMEX and confirm fetched == distinct == totalCount (2127/3321/253). (Not a commit requirement; used to confirm before re-running the registry.)
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/pytvtools_core/watchlists.py tests/test_watchlists.py
+git commit -m "fix(core): stable sort in screen() pagination for exact scans"
+```
+
+**Downstream effect:** after this lands and is synced/pushed/force-synced, **repeat the Task 7 registry rebuild**. Keep Tasks 8-9 as-is (their verification queries stay valid — they now expect US_STOCKS ≈ 5701, distinct total ≈ 6350).
+
+---
+
 ### Task 2: Registry builder unions US stocks
 
 **Files:**
