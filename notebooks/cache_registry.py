@@ -32,9 +32,11 @@ print(f"Building registry {OUTPUT_TABLE} from {OHLCV_TABLE}")
 
 # COMMAND ----------
 
-# 1. build (symbol, watchlist, source) entries - all watchlists + S&P 500
-entries = registry_rows()
-print(f"Registry entries: {len(entries)}")
+# 1. build (symbol, watchlist, source) entries - all watchlists + S&P 500 + US stocks
+from pytvtools_core.watchlists import registry_rows, us_stock_rows
+
+entries = registry_rows() + us_stock_rows()
+print(f"Registry entries: {len(entries)} ({sum(1 for r in entries if r['source'] == 'screen')} from screen)")
 
 # COMMAND ----------
 
@@ -72,4 +74,9 @@ print(f"Done. {OUTPUT_TABLE}: {total} rows, {with_bars} with data.")
 print("Top watchlists:")
 spark.sql(
     f"SELECT watchlist, count(*) AS n FROM {OUTPUT_TABLE} GROUP BY watchlist ORDER BY n DESC"
+).show(truncate=False)
+print("US_STOCKS bucket:")
+spark.sql(
+    f"SELECT count(DISTINCT symbol) AS n FROM {OUTPUT_TABLE} "
+    f"WHERE watchlist = 'US_STOCKS'"
 ).show(truncate=False)
