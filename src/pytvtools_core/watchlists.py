@@ -424,12 +424,17 @@ def screen(
     columns: tuple[str, ...] = ("name",),
     page_size: int = _PAGE_SIZE,
     timeout: float = 30.0,
+    sort_by: str | None = "name",
 ) -> tuple[list[dict[str, object]], int]:
     """Query TradingView's stock-screener endpoint.
 
     Returns ``(rows, total_count)`` where each row is a dict, e.g.
     ``{"symbol": "NYSE:A", "name": "A", "close": 145.97}``.  Paginates
-    internally through the full result set.
+    internally through the full result set.  A stable sort (default
+    ``"name"``) is required for correct pagination — TradingView's default
+    order is unstable across page requests, which causes duplicate/missing
+    symbols.  ``sort_by=None`` disables the sort only for callers who
+    know the server returns a stable order.
 
     Parameters
     ----------
@@ -445,6 +450,9 @@ def screen(
         symbol itself is always present as the ``"symbol"`` key.
     timeout : float
         Seconds to wait for the server response.
+    sort_by : str | None
+        Column to sort results by (default ``"name"``, ascending) — required
+        for correct pagination.  ``None`` omits the sort entirely.
     """
     rows: list[dict[str, object]] = []
     total: int | None = None
@@ -453,8 +461,10 @@ def screen(
         payload: dict[str, object] = {
             "symbols": {"query": {"types": list(types)}},
             "columns": list(columns),
-            "range": [offset, offset + page_size],
         }
+        if sort_by:
+            payload["sort"] = {"sortBy": sort_by, "sortOrder": "asc"}
+        payload["range"] = [offset, offset + page_size]
         if exchange:
             payload["filter"] = [
                 {"left": "exchange", "operation": "equal", "right": exchange}

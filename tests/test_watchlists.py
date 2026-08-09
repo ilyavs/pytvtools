@@ -232,6 +232,19 @@ class TestScreen:
             {"left": "exchange", "operation": "equal", "right": "NYSE"}
         ]
 
+    def test_sends_stable_sort(self):
+        seen = {}
+
+        def _open(req, timeout=None):
+            body = json.loads(req.data.decode())
+            seen["sort"] = body.get("sort")
+            return io.BytesIO(json.dumps(
+                {"totalCount": 1, "data": [{"s": "NYSE:A", "d": ["A"]}]}).encode())
+
+        with mock.patch("urllib.request.urlopen", side_effect=_open):
+            screen(exchange="NYSE")
+        assert seen["sort"] == {"sortBy": "name", "sortOrder": "asc"}
+
     def test_paginates_until_all_fetched(self):
         dataset = ["A", "AB", "ABT"]
         seen_ranges = []
