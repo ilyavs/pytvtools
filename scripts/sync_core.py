@@ -20,12 +20,14 @@ CORE_TESTS = [
     REPO_ROOT / "tests" / "test_indicators.py",
     REPO_ROOT / "tests" / "test_watchlists.py",
     REPO_ROOT / "tests" / "test_tvdata.py",
+    REPO_ROOT / "tests" / "test_measures.py",
 ]
 
 CORE_NOTEBOOKS = [
     REPO_ROOT / "notebooks" / "cache_refresh.py",
     REPO_ROOT / "notebooks" / "cache_registry.py",
     REPO_ROOT / "notebooks" / "stress_test_tvdata_limits.py",
+    REPO_ROOT / "notebooks" / "absorption_ratio.py",
 ]
 
 CORE_JOBS = [
@@ -85,7 +87,7 @@ name = "pytvtools-core"
 version = "0.1.0"
 description = "Pure Python TradingView tools - indicators, watchlists, TVData WebSocket fetcher."
 requires-python = ">=3.11"
-dependencies = ["websockets>=16.0"]
+dependencies = ["websockets>=16.0", "numpy>=1.26"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
