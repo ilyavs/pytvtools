@@ -22,6 +22,10 @@
 
 # COMMAND ----------
 
+# MAGIC %pip install -q websockets
+
+# COMMAND ----------
+
 import sys
 from datetime import datetime, timezone
 
@@ -240,14 +244,11 @@ except Exception as exc:
 # COMMAND ----------
 
 if mode == "backfill":
-    import numpy as np
     import pandas as pd
 
     out = pd.DataFrame({
-        "timestamp": daily.index[ends_d].astype("int64"),
+        "ts": daily.index[ends_d].astype("int64"),
         "ar_daily": ar_daily,
-        "ar_weekly": np.nan,
-        "spx_close": np.nan,
     })
     # Align weekly AR + SPX close to the daily axis via merge_asof.
     wk = pd.DataFrame({"ts": dates_w.astype("int64"), "ar_weekly": ar_weekly})
@@ -257,5 +258,6 @@ if mode == "backfill":
     out = pd.merge_asof(out, spx, on="ts", direction="backward")
     out = out.rename(columns={"ts": "timestamp"})
     spark.createDataFrame(out).write.mode("overwrite") \
+         .option("overwriteSchema", "true") \
          .saveAsTable("workspace.chartdata.absorption_ratio")
     print("Backfilled workspace.chartdata.absorption_ratio")
