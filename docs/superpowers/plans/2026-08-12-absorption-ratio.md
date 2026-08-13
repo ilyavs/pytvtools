@@ -1,6 +1,6 @@
 # Absorption Ratio + SPX Chart Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Compute the absorption ratio (Kritzman et al. 2010) from `workspace.chartdata.ohlcv` and render it alongside S&P 500 (`SPCFD:SPX`) using TradingView Lightweight Charts, delivered as an interactive Databricks notebook.
 
@@ -35,7 +35,7 @@
 - Consumes: nothing (pure numpy).
 - Produces: `absorption_ratio(returns: np.ndarray, n_eigenvectors: int | float = 1) -> float` — used by Task 2's rolling fn; `_n_keep(n_eigenvectors, N)` helper (module-private, reused by both).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_measures.py`:
 
@@ -100,12 +100,12 @@ def test_absorption_ratio_raises_on_nan():
         raise AssertionError("expected ValueError on NaN input")
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `docker exec -w /app docker-pytvtools-1 python -m pytest tests/test_measures.py -q`
 Expected: FAIL — `ModuleNotFoundError: No module named 'pytvtools_core.measures'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Create `src/pytvtools_core/measures.py`:
 
@@ -170,12 +170,12 @@ def absorption_ratio(
     return float(eigvals[-k:].sum() / eigvals.sum())
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `docker exec -w /app docker-pytvtools-1 python -m pytest tests/test_measures.py -q`
 Expected: PASS (the `test_absorption_ratio_monotonic_in_eigenvectors` pass — 0.8 < ar1≈0.981 < ar2==1.0).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 docker exec -w /app docker-pytvtools-1 python -m pytest tests/test_measures.py -q
@@ -195,7 +195,7 @@ git commit -m "feat(core): add absorption_ratio() — Kritzman systemic risk mea
 - Consumes: `absorption_ratio` + `_n_keep` from Task 1.
 - Produces: `rolling_absorption_ratio(closes: np.ndarray, window: int = 500, step: int = 1, n_eigenvectors: int | float = 1) -> tuple[np.ndarray, np.ndarray]`. First array = window-end timestamps (idx of last bar in each window), second = AR per window. Used by Task 3's notebook.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/test_measures.py`:
 
@@ -240,12 +240,12 @@ def test_rolling_asserts_no_nan_in_window():
         raise AssertionError("expected ValueError on NaN in window")
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `docker exec -w /app docker-pytvtools-1 python -m pytest tests/test_measures.py -q`
 Expected: FAIL — `ImportError: cannot import name 'rolling_absorption_ratio'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Append to `src/pytvtools_core/measures.py`:
 
@@ -298,12 +298,12 @@ def rolling_absorption_ratio(
 
 Note: `returns[i] = (closes[i+1]-closes[i])/closes[i]`, so window ending at bar index `last` uses `returns[last-window : last]`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `docker exec -w /app docker-pytvtools-1 python -m pytest tests/test_measures.py -q`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 docker exec -w /app docker-pytvtools-1 python -m pytest tests/test_measures.py -q
@@ -322,7 +322,7 @@ git commit -m "feat(core): add rolling_absorption_ratio() for time-series AR"
 - Consumes: `get_watchlist`, `get_sp500`, `get_us_stocks` (from `pytvtools_core.watchlists`); `rolling_absorption_ratio` (Task 2); `Chart` (`pytvtools_core.chart`); Spark SQL on `workspace.chartdata.ohlcv`.
 - Produces: interactive Lightweight Charts HTML (displayHTML + UC volume file). No later task depends on its internals.
 
-- [ ] **Step 1: Write the notebook**
+- [x] **Step 1: Write the notebook**
 
 Create `notebooks/absorption_ratio.py`:
 
@@ -580,12 +580,12 @@ if mode == "backfill":
     print("Backfilled workspace.chartdata.absorption_ratio")
 ```
 
-- [ ] **Step 2: Verify syntax locally**
+- [x] **Step 2: Verify syntax locally**
 
 Run: `docker exec -w /app docker-pytvtools-1 python -c "import ast; ast.parse(open('/app/notebooks/absorption_ratio.py').read())"`
 Expected: no syntax errors. (Notebook is Databricks-only; no local execution.)
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 docker exec -w /app docker-pytvtools-1 python -c "import ast; ast.parse(open('/app/notebooks/absorption_ratio.py').read())"
@@ -604,36 +604,36 @@ git commit -m "feat(notebooks): absorption ratio + SPX Lightweight Charts notebo
 - Consumes: everything from Tasks 1–3.
 - Produces: updated standalone repo + Databricks workspace git folder carrying `measures.py` + notebook.
 
-- [ ] **Step 1: Edit sync lists + numpy dep**
+- [x] **Step 1: Edit sync lists + numpy dep**
 
 In `scripts/sync_core.py`:
 1. Add to `CORE_TESTS`: `REPO_ROOT / "tests" / "test_measures.py"`
 2. Add to `CORE_NOTEBOOKS`: `REPO_ROOT / "notebooks" / "absorption_ratio.py"`
 3. In the generated `pyproject.toml`, change `dependencies = ["websockets>=16.0"]` to `dependencies = ["websockets>=16.0", "numpy>=1.26"]`
 
-- [ ] **Step 2: Run the core test suite to confirm nothing regressed**
+- [x] **Step 2: Run the core test suite to confirm nothing regressed**
 
 Run: `docker exec -w /app docker-pytvtools-1 python -m pytest tests/test_measures.py tests/test_watchlists.py -q`
 Expected: PASS (measures + watchlists).
 
-- [ ] **Step 3: Sync to the public repo**
+- [x] **Step 3: Sync to the public repo**
 
 Run: `python scripts/sync_core.py ../pytvtools-core-public --commit "feat(core): absorption ratio measures + notebook"`
 Expected: copies `measures.py`, `test_measures.py`, `absorption_ratio.py`; commits to the public repo.
 
-- [ ] **Step 4: Push the public repo**
+- [x] **Step 4: Push the public repo**
 
 Run: `git -C ../pytvtools-core-public push`
 Expected: push of branch `main` to `ilyavs/pytvtools-core`.
 
-- [ ] **Step 5: Verify tests in the standalone repo**
+- [x] **Step 5: Verify tests in the standalone repo**
 
 Run: `git -C ../pytvtools-core-public stash list` (should be clean) then:
 `cd /home/ilya/github/pytvtools-core-public && python3 -m pytest tests/test_measures.py -q` — note the standalone repo lacks numpy locally; use `PYTHONPATH=/tmp/opencode/dbsite`:
 `PYTHONPATH=/tmp/opencode/dbsite python3 -m pytest tests/test_measures.py -q`
 Expected: PASS.
 
-- [ ] **Step 6: Force-sync the Databricks workspace git folder**
+- [x] **Step 6: Force-sync the Databricks workspace git folder**
 
 Run:
 ```python
@@ -658,7 +658,7 @@ print("OK")
 ```
 Expected: `OK`.
 
-- [ ] **Step 7: Commit the main-repo sync-script change**
+- [x] **Step 7: Commit the main-repo sync-script change**
 
 ```bash
 git add scripts/sync_core.py
@@ -675,7 +675,7 @@ git push origin main
 **Interfaces:**
 - Consumes: deployed notebook from Task 4.
 
-- [ ] **Step 1: Run the notebook via the on-demand job**
+- [x] **Step 1: Run the notebook via the on-demand job**
 
 Run:
 ```python
@@ -691,7 +691,7 @@ print(run.run_id)
 ```
 Poll `ws.jobs.get_run(run_id=run.run_id)` until `TERMINATED`; record `state.result_state`.
 
-- [ ] **Step 2: Verify sanity of the computed AR series**
+- [x] **Step 2: Verify sanity of the computed AR series**
 
 After the run, query the notebook's printed stats in the run output, OR run a one-off check via `mode=backfill` and query the table:
 ```sql
@@ -702,13 +702,33 @@ FROM workspace.chartdata.absorption_ratio;
 ```
 Expected: `n > 1000`, `0 < avg < 1`, daily AR in `[0,1]`, weekly AR in `[0,1]`. (For 11 sector ETFs with 1 eigenvector, AR typically sits in the ~0.3–0.7 range; peaks should coincide with major drawdowns in SPX.)
 
-- [ ] **Step 3: Confirm the volume HTML exists**
+- [x] **Step 3: Confirm the volume HTML exists**
 
 ```sql
 LIST '/Volumes/workspace/chartdata/chart_output/';
 ```
 Expected: `absorption_ratio_*.html` file(s); open one to confirm the two synced panes render (SPX candles above, two AR lines below).
 
-- [ ] **Step 4: Update the progress ledger**
+- [x] **Step 4: Update the progress ledger**
 
 Append a dated entry to `.superpowers/` progress notes (or commit a one-line note) summarizing: constants, AR range, chart confirmed.
+
+---
+
+## Execution log (2026-08-13)
+
+All 5 tasks completed and verified live in Databricks.
+
+- **Tasks 1–2**: `absorption_ratio()` + `rolling_absorption_ratio()` in `src/pytvtools_core/measures.py`. 9 unit tests pass in container (`docker exec -w /app docker-pytvtools-1 python3 -m pytest tests/test_measures.py -q`). Constants verified in-container: frds example `0.7746543307660259`, perfect-correlation `1.0`.
+- **Task 3**: `notebooks/absorption_ratio.py` deployed via `sync_core.py` → push → workspace git force-sync.
+- **Task 4**: `sync_core.py` updated (`CORE_TESTS` += `test_measures.py`, `CORE_NOTEBOOKS` += `absorption_ratio.py`, generated pyproject deps += `numpy>=1.26`).
+- **Task 5 (live)**: created temp serverless job (modeled on `cache_refresh_daily`, which runs serverless with no cluster config) pointing at the notebook; ran `view` and `backfill` modes.
+  - **Fix 1**: serverless runtime lacked `websockets` (pulled by `pytvtools_core/__init__` → `tvdata`) — added `%pip install -q websockets` cell.
+  - **Fix 2**: backfill `merge_asof(on="ts")` failed because base `out` used a `timestamp` column — renamed to `ts`.
+  - **Fix 3**: placeholder `ar_weekly`/`spx_close` columns collided with merge outputs (`_x`/`_y`) — removed placeholders, let merges add columns.
+  - **Fix 4**: `DELTA_METADATA_MISMATCH` from earlier bad schema — added `.option("overwriteSchema", "true")` on the backfill write.
+  - Temp job deleted after verification.
+- **Verified outputs**:
+  - Volume HTML: `/Volumes/workspace/chartdata/chart_output/absorption_ratio_2026-08-13.html` (379 KB; panes `chart0`/`chart1`, `lightweight-charts` + `AR daily (500d)` + `AR weekly (52w)` + `SPCFD:SPX` present; 3347 value points).
+  - UC table `workspace.chartdata.absorption_ratio`: **1546 rows**, daily AR avg **0.646** (0.489–0.801), weekly AR avg **0.600** (0.355–0.858) — plausible band for sector ETFs with k=1.
+  - Note: the repo's 4 `cache_refresh_*` jobs and the `jobs/*.json` templates were found to be missing/no-cluster at execution time; live runs were done via a temp serverless job instead (serverless is the only available compute).
