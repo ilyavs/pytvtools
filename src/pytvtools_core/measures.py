@@ -53,6 +53,61 @@ def absorption_ratio(
 
     cov = np.cov(arr, rowvar=False)
     eigvals = np.linalg.eigvalsh(cov)
+    total = float(eigvals.sum())
+    if total == 0.0:
+        raise ValueError("returns have zero total variance — absorption ratio undefined")
     k = _n_keep(n_eigenvectors, arr.shape[1])
     # eigvalsh returns ascending; top k are the LAST k.
-    return float(eigvals[-k:].sum() / eigvals.sum())
+    return float(eigvals[-k:].sum() / total)
+
+
+def rolling_absorption_ratio(
+    closes: Any,
+    window: int = 500,
+    step: int = 1,
+    n_eigenvectors: int | float = 1,
+) -> tuple[Any, Any]:
+    """Rolling absorption ratio over a close-price matrix.
+
+    Parameters
+    ----------
+    closes : np.ndarray, shape (T, N)
+        Close prices, rows = bars (oldest first), cols = assets.
+    window : int
+        Rolling window length in bars (500-days or 52-weeks canonical).
+    step : int
+        Recompute every ``step`` bars (1 = every bar).
+    n_eigenvectors : int | float
+        Passed through to :func:`absorption_ratio`.
+
+    Returns
+    -------
+    (windows_ts, ar_series) : tuple[np.ndarray, np.ndarray]
+        ``windows_ts[i]`` = bar index (into *closes*) of the last bar of
+        window *i*; ``ar_series[i]`` = absorption ratio over that window.
+        ``len(windows_ts) = 1 + (T - window) // step``.
+    """
+    import numpy as np
+
+    arr = np.asarray(closes, dtype=float)
+    if arr.ndim != 2:
+        raise ValueError("closes must be 2-D (T, N)")
+    if arr.shape[0] <= window:
+        raise ValueError(f"closes too short: {arr.shape[0]} rows < window {window}")
+
+    returns = np.diff(arr, axis=0) / arr[:-1]
+    n_windows = 1 + (arr.shape[0] - window) // step
+    ar = np.full(n_windows, np.nan)
+    ends = np.full(n_windows, -1, dtype=np.int64)
+    for i in range(n_windows):
+        last = window - 1 + i * step  # bar index (0-based) ending the window
+        # returns[k] = (closes[k+1]-closes[k])/closes[k]; the closes
+        # [last-window+1 .. last] span W-1 internal transitions.
+        w_returns = returns[last - window + 1 : last]
+        if bool(np.isnan(w_returns).any()):
+            raise ValueError(
+                "NaN in covariance window — align/trim inputs (trim common calendar + ffill) first"
+            )
+        ar[i] = absorption_ratio(w_returns, n_eigenvectors)
+        ends[i] = last
+    return ends, ar
