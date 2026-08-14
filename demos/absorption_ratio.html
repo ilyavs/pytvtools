@@ -310,8 +310,10 @@
   trackLegend(2);
 
   // ── crosshair position sync (both directions, guarded) ──
+  // setCrosshairPosition(price, horizontalPosition, seriesApi) — the series
+  // arg is REQUIRED or lightweight-charts silently ignores the call.
   var _xGuard = false;
-  function link(src, dst, map) {
+  function link(src, dstSeries, dst, map) {
     src.subscribeCrosshairMove(function(param) {
       if (_xGuard) return;
       _xGuard = true;
@@ -319,15 +321,15 @@
         if (!param.time || !param.point) { dst.clearCrosshairPosition(); }
         else {
           var p = map[param.time];
-          if (p !== undefined) dst.setCrosshairPosition(p, param.time);
+          if (p !== undefined) dst.setCrosshairPosition(p, param.time, dstSeries);
         }
       } finally { _xGuard = false; }
     });
   }
-  link(chart0, chart1, arDailyValByTime);
-  link(chart0, chart2, arWeeklyValByTime);
-  link(chart1, chart0, spxCloseByTime);
-  link(chart2, chart0, spxCloseByTime);
+  link(chart0, s1_0, chart1, arDailyValByTime);
+  link(chart0, s1_1, chart2, arWeeklyValByTime);
+  link(chart1, cs0, chart0, spxCloseByTime);
+  link(chart2, cs0, chart0, spxCloseByTime);
 })();
 </script>
 </body>
