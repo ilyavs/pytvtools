@@ -102,3 +102,60 @@ def test_rolling_asserts_no_nan_in_window():
         pass
     else:
         raise AssertionError("expected ValueError on NaN in window")
+
+
+def test_absorption_ratio_exponential_matches_manual_weighted_cov():
+    """Exponential weighting (half-life) must equal a hand-computed
+    exponentially-weighted covariance eigendecomposition."""
+    rng = np.random.default_rng(8)
+    returns = rng.standard_normal((40, 3))
+    half_life = 10.0
+
+    T = returns.shape[0]
+    ages = np.arange(T - 1, -1, -1)  # oldest row has the largest age
+    w = 0.5 ** (ages / half_life)
+    w = w / w.sum()
+    mu = np.sum(returns * w[:, None], axis=0)
+    dc = returns - mu
+    cov = (dc * w[:, None]).T @ dc
+    eig = np.linalg.eigvalsh(cov)
+    expected = float(eig[-1:].sum() / eig.sum())
+
+    got = absorption_ratio(returns, n_eigenvectors=1, half_life=half_life)
+    assert got == pytest.approx(expected, abs=1e-9)
+
+
+def test_absorption_ratio_long_half_life_equals_equal_weight():
+    """A very long half-life makes weights ~uniform, recovering np.cov."""
+    rng = np.random.default_rng(9)
+    returns = rng.standard_normal((60, 4))
+    ar_short = absorption_ratio(returns, n_eigenvectors=2, half_life=5)
+    ar_long = absorption_ratio(returns, n_eigenvectors=2, half_life=1e6)
+    ar_eq = absorption_ratio(returns, n_eigenvectors=2)
+    assert ar_long == pytest.approx(ar_eq, abs=1e-4)
+    # recent correlation dominates with a short half-life -> different value
+    assert not np.isclose(ar_short, ar_eq)
+
+
+def test_absorption_ratio_exponential_captures_recent_correlation():
+    """A recent correlation spike should raise AR more under a short half-life
+    than under equal weighting."""
+    rng = np.random.default_rng(10)
+    n = 300
+    x = rng.standard_normal(n)
+    z = rng.standard_normal(n)
+    y = np.where(np.arange(n) < n - 60, z, x)  # uncorrelated, then = x
+    returns = np.column_stack([x, y])
+    ar_short = absorption_ratio(returns, n_eigenvectors=1, half_life=10)
+    ar_eq = absorption_ratio(returns, n_eigenvectors=1)
+    assert ar_short > ar_eq
+
+
+def test_rolling_exponential_half_life():
+    rng = np.random.default_rng(11)
+    closes = np.cumsum(rng.standard_normal((120, 3)), axis=0) + 100.0
+    end, ar = rolling_absorption_ratio(
+        closes, window=20, n_eigenvectors=1, half_life=10
+    )
+    assert len(ar) == 1 + (120 - 20)
+    assert np.nanmax(ar) <= 1.0 + 1e-9

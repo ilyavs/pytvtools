@@ -1,4 +1,4 @@
-"""Sync pytvtools_core to a standalone public repo.
+"""Sync pytvtools_core + demo products to a standalone public repo.
 
 Usage:
     python scripts/sync_core.py ../pytvtools-core-public
@@ -28,6 +28,12 @@ CORE_NOTEBOOKS = [
     REPO_ROOT / "notebooks" / "cache_registry.py",
     REPO_ROOT / "notebooks" / "stress_test_tvdata_limits.py",
     REPO_ROOT / "notebooks" / "absorption_ratio.py",
+]
+
+CORE_DEMOS = [
+    REPO_ROOT / "demos" / "absorption_ratio.html",
+    REPO_ROOT / "demos" / "demo_chart.html",
+    REPO_ROOT / "demos" / "demo.py",
 ]
 
 CORE_JOBS = [
@@ -79,6 +85,14 @@ def main() -> None:
         if j.exists():
             shutil.copy2(j, target_jobs / j.name)
             print(f"Copied {j.name}")
+
+    # Copy demos (static HTML products + generator, served via GitHub Pages)
+    target_demos = target / "demos"
+    target_demos.mkdir(parents=True, exist_ok=True)
+    for d in CORE_DEMOS:
+        if d.exists():
+            shutil.copy2(d, target_demos / d.name)
+            print(f"Copied {d.name}")
 
     # Generate pyproject.toml in target root
     core_pp = target / "pyproject.toml"

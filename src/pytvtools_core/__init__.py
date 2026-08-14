@@ -1,7 +1,7 @@
 from pytvtools_core.indicators import rsi, sma, ema, macd, mfi, bbands, atr, srsi, supertrend, dss, market_cipher_b
 from pytvtools_core.watchlists import (
     Watchlist, get_sp500, get_watchlist,
-    SPDR_SECTORS, SPDR_INDUSTRIES, SPDR_ALL, CRYPTO,
+    SPDR_SECTORS, SPDR_SECTORS_CORE, SPDR_INDUSTRIES, SPDR_ALL, CRYPTO,
     METALS_MINERS, INDEX_FUTURES, INDEX_CFDS, INDEX_ETFS,
     BONDS, OIL, URANIUM_STRATEGIC,
     WATCHLISTS, PINK_LIST_WATCHLISTS,
@@ -15,7 +15,7 @@ __all__ = [
     "rsi", "sma", "ema", "macd", "mfi", "bbands", "atr", "srsi", "supertrend", "dss",
     "market_cipher_b",
     "Watchlist", "get_sp500", "get_watchlist",
-    "SPDR_SECTORS", "SPDR_INDUSTRIES", "SPDR_ALL", "CRYPTO",
+    "SPDR_SECTORS", "SPDR_SECTORS_CORE", "SPDR_INDUSTRIES", "SPDR_ALL", "CRYPTO",
     "METALS_MINERS", "INDEX_FUTURES", "INDEX_CFDS", "INDEX_ETFS",
     "BONDS", "OIL", "URANIUM_STRATEGIC",
     "WATCHLISTS", "PINK_LIST_WATCHLISTS",

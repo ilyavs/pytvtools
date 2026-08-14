@@ -79,6 +79,21 @@ SPDR_SECTORS = Watchlist(
     ),
 )
 
+SPDR_SECTORS_CORE = Watchlist(
+    name="SPDR S&P 500 Select Sectors — original 9 (no XLC/XLRE)",
+    symbols=(
+        "XLK",   # Technology
+        "XLY",   # Consumer Discretionary
+        "XLP",   # Consumer Staples
+        "XLE",   # Energy
+        "XLF",   # Financials
+        "XLV",   # Health Care
+        "XLI",   # Industrials
+        "XLB",   # Materials
+        "XLU",   # Utilities
+    ),
+)
+
 # ---------------------------------------------------------------------------
 # SPDR Industry ETFs (sub-sector / modified equal-weight)
 # ---------------------------------------------------------------------------
@@ -371,6 +386,7 @@ URANIUM_STRATEGIC = Watchlist(
 
 WATCHLISTS: dict[str, Watchlist] = {
     "SPDR_SECTORS": SPDR_SECTORS,
+    "SPDR_SECTORS_CORE": SPDR_SECTORS_CORE,
     "SPDR_INDUSTRIES": SPDR_INDUSTRIES,
     "SPDR_ALL": SPDR_ALL,
     "CRYPTO": CRYPTO,
