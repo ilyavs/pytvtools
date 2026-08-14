@@ -330,6 +330,8 @@
   link(chart0, s1_1, chart2, arWeeklyValByTime);
   link(chart1, cs0, chart0, spxCloseByTime);
   link(chart2, cs0, chart0, spxCloseByTime);
+  link(chart1, s1_1, chart2, arWeeklyValByTime);
+  link(chart2, s1_0, chart1, arDailyValByTime);
 })();
 </script>
 </body>
