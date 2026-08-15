@@ -21,6 +21,7 @@ CORE_TESTS = [
     REPO_ROOT / "tests" / "test_watchlists.py",
     REPO_ROOT / "tests" / "test_tvdata.py",
     REPO_ROOT / "tests" / "test_measures.py",
+    REPO_ROOT / "tests" / "test_classifications.py",
 ]
 
 CORE_NOTEBOOKS = [
@@ -28,6 +29,7 @@ CORE_NOTEBOOKS = [
     REPO_ROOT / "notebooks" / "cache_registry.py",
     REPO_ROOT / "notebooks" / "stress_test_tvdata_limits.py",
     REPO_ROOT / "notebooks" / "absorption_ratio.py",
+    REPO_ROOT / "notebooks" / "cache_classifications.py",
 ]
 
 CORE_DEMOS = [
