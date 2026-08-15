@@ -802,3 +802,119 @@ _GICS_CONSTITUENTS_STATIC: list[dict[str, str]] = [
     {"symbol": 'ZBH', "security": 'Zimmer Biomet', "sector": 'Health Care', "sub_industry": 'Health Care Equipment'},
     {"symbol": 'ZTS', "security": 'Zoetis', "sector": 'Health Care', "sub_industry": 'Pharmaceuticals'},
 ]
+
+# ---------------------------------------------------------------------------
+# GICS classification accessor
+# ---------------------------------------------------------------------------
+
+_GICS_CONSTITUENTS_URL = (
+    "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/"
+    "main/data/constituents.csv"
+)
+
+_gics_cache: list[dict[str, str]] | None = None
+
+
+def _fetch_constituents() -> list[dict[str, str]]:
+    """Fetch live constituents.csv; on any failure return the static snapshot."""
+    try:
+        import pandas as pd
+
+        df = pd.read_csv(_GICS_CONSTITUENTS_URL)
+        rows = []
+        for _, row in df.iterrows():
+            rows.append({
+                "symbol": str(row["Symbol"]).replace(".", "-"),
+                "security": str(row["Security"]),
+                "sector": str(row["GICS Sector"]),
+                "sub_industry": str(row["GICS Sub-Industry"]),
+            })
+        return rows
+    except Exception as exc:  # noqa: BLE001 — mirror get_sp500's blanket fallback
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "GICS constituents fetch failed (%s); using static snapshot",
+            exc,
+        )
+        return list(_GICS_CONSTITUENTS_STATIC)
+
+
+def _sub_industry_code_index() -> dict[str, str]:
+    """name -> code for LEVEL-4 rows only (names collide across tiers)."""
+    idx = {}
+    for code, r in _GICS_HIERARCHY.items():
+        if r["level_num"] == "4":
+            idx.setdefault(r["name"], code)
+    return idx
+
+
+def _rollup(sub_code: str) -> dict[str, str]:
+    """Walk parent chain: sub-industry -> industry -> group -> sector."""
+    sub = _GICS_HIERARCHY[sub_code]
+    ind = _GICS_HIERARCHY[sub["parent_code"]]
+    grp = _GICS_HIERARCHY[ind["parent_code"]]
+    sec = _GICS_HIERARCHY[grp["parent_code"]]
+    return {
+        "industry_group": grp["name"],
+        "industry": ind["name"],
+        "sector": sec["name"],
+    }
+
+
+def _resolve_symbol(bare: str, prefix_map: dict[str, str]) -> str:
+    """Prefer an exchange-prefixed match (tolerant of . vs -); else bare."""
+    if bare in prefix_map:
+        return prefix_map[bare]
+    for key, val in prefix_map.items():
+        if key.replace("-", ".") == bare.replace("-", "."):
+            return val
+    return bare
+
+
+def get_gics_classifications(
+    *,
+    force_refetch: bool = False,
+    symbol_map: dict[str, str] | None = None,
+) -> list[dict[str, str]]:
+    """S&P 500 member GICS classification with four-tier roll-up.
+
+    Parameters
+    ----------
+    force_refetch : bool
+        Bypass the in-memory cache and refetch constituents.csv.
+    symbol_map : dict[str, str] | None
+        Mapping ``bare_symbol -> exchange_prefixed_symbol`` (e.g.
+        ``{"AAPL": "NASDAQ:AAPL", "BRK-B": "NYSE:BRK.B"}``), used to emit
+        ``symbol`` in the same form ``ohlcv`` stores.  Unmatched symbols keep
+        bare dash-form.
+    """
+    global _gics_cache
+    if _gics_cache is not None and not force_refetch:
+        rows = _gics_cache
+    else:
+        constituents = _fetch_constituents()
+        idx = _sub_industry_code_index()
+        rows = []
+        for c in constituents:
+            sub_code = idx.get(c["sub_industry"])
+            if sub_code is None:
+                raise ValueError(
+                    f"Unknown GICS sub-industry: {c['sub_industry']!r} "
+                    f"({c['symbol']})"
+                )
+            rows.append({
+                "symbol": c["symbol"],
+                "security": c["security"],
+                "sub_industry": c["sub_industry"],
+                **_rollup(sub_code),
+            })
+        _gics_cache = rows
+
+    prefix_map = symbol_map or {}
+    out = []
+    for r in rows:
+        row = dict(r)
+        row["symbol"] = _resolve_symbol(r["symbol"], prefix_map)
+        out.append(row)
+    return out
