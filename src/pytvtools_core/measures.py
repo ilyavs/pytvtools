@@ -154,3 +154,67 @@ def rolling_absorption_ratio(
         ar[i] = absorption_ratio(w_returns, n_eigenvectors, half_life)
         ends[i] = last
     return ends, ar
+
+
+def cap_weighted_index(
+    closes: Any,
+    caps: Any,
+    base: float = 100.0,
+) -> Any:
+    """Cap-weighted index level series from member closes + static caps.
+
+    Weights renormalize every date to the members that actually contribute a
+    return (data on both that date and the previous one) — a member's first
+    trading day has no prior close, so it ramps in from the next day. Members
+    with non-positive caps never participate. The index therefore spans the
+    oldest available member and is never truncated by a younger listing.
+
+    Parameters
+    ----------
+    closes : np.ndarray, shape (T, N)
+        Close prices, rows = dates (oldest first), cols = members. ``NaN``
+        marks a member not trading that date.
+    caps : np.ndarray, shape (N,)
+        Market caps as-of a snapshot date, held static across time.
+    base : float
+        Index level at the first date any member trades. Default 100.0.
+
+    Returns
+    -------
+    np.ndarray, shape (T,)
+        Index levels; rows before the first trading date are ``NaN``.
+    """
+    import numpy as np
+
+    arr = np.asarray(closes, dtype=float)
+    w = np.asarray(caps, dtype=float)
+    if arr.ndim != 2:
+        raise ValueError("closes must be 2-D (T, N)")
+    if w.ndim != 1 or w.shape[0] != arr.shape[1]:
+        raise ValueError(
+            f"caps must be 1-D with length {arr.shape[1]} (got {w.shape})"
+        )
+    if base <= 0:
+        raise ValueError("base must be positive")
+
+    T = arr.shape[0]
+    levels = np.full(T, np.nan)
+    has_any = ~np.isnan(arr).all(axis=1)
+    if not has_any.any():
+        raise ValueError("closes has no row with any member data — index undefined")
+    start = int(np.argmax(has_any))
+    levels[start] = base
+
+    eligible = np.isfinite(arr) & (w > 0)[None, :]  # (T, N) bool
+    for t in range(start + 1, T):
+        prev_ok = eligible[t - 1]
+        now_ok = eligible[t]
+        idx = np.flatnonzero(prev_ok & now_ok)
+        if idx.size == 0:
+            levels[t] = levels[t - 1]  # no member trades both days — carry forward
+            continue
+        cw = w[idx]
+        rets = arr[t, idx] / arr[t - 1, idx] - 1.0
+        r = float(np.dot(cw, rets) / cw.sum())
+        levels[t] = levels[t - 1] * (1.0 + r)
+    return levels

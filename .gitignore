@@ -13,3 +13,9 @@ __pycache__/
 dist/
 build/
 .pytest_cache/
+
+# Git worktrees
+/.worktrees/
+
+# SDD plan workspace
+/.superpowers/

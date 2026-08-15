@@ -2,6 +2,7 @@
 
 import io
 import json
+import urllib.error
 from unittest import mock
 
 import pytest
@@ -21,6 +22,7 @@ from pytvtools_core.watchlists import (
     WATCHLISTS,
     screen,
     get_watchlist,
+    get_market_caps,
     us_stock_rows,
     get_us_stocks,
 )
@@ -321,3 +323,69 @@ class TestUSStocks:
             wl = get_us_stocks()
         assert wl.name == "US Stocks"
         assert wl.symbols == ("NYSE:XOM",)
+
+
+class TestGetMarketCaps:
+    """get_market_caps() queries the scanner by explicit ticker list."""
+
+    URL = "https://scanner.tradingview.com/america/scan"
+
+    @staticmethod
+    def _fake_urlopen(responses):
+        seq = iter(responses)
+
+        def _open(req, timeout=None):
+            return io.BytesIO(json.dumps(next(seq)).encode())
+
+        return _open
+
+    def test_posts_ticker_list_and_market_cap_basic(self):
+        seen = {}
+
+        def _open(req, timeout=None):
+            seen["url"] = req.full_url
+            seen["data"] = json.loads(req.data.decode())
+            return io.BytesIO(json.dumps({
+                "totalCount": 2,
+                "data": [
+                    {"s": "NASDAQ:AAPL", "d": [4460000000000]},
+                    {"s": "NYSE:BRK.B", "d": [971000000000]},
+                ],
+            }).encode())
+
+        with mock.patch("urllib.request.urlopen", side_effect=_open):
+            caps = get_market_caps(["AAPL", "BRK.B"])
+        assert seen["url"] == TestGetMarketCaps.URL
+        assert seen["data"]["symbols"] == {"tickers": ["AAPL", "BRK.B"]}
+        assert seen["data"]["columns"] == ["market_cap_basic"]
+        assert seen["data"]["range"] == [0, 2]
+        assert caps == {
+            "NASDAQ:AAPL": 4460000000000.0,
+            "NYSE:BRK.B": 971000000000.0,
+        }
+
+    def test_drops_null_caps(self):
+        resp = {
+            "totalCount": 3,
+            "data": [
+                {"s": "NASDAQ:AAPL", "d": [4460000000000]},
+                {"s": "NYSE:X", "d": [None]},
+                {"s": "NASDAQ:Y", "d": [None]},
+            ],
+        }
+        with mock.patch("urllib.request.urlopen",
+                        side_effect=self._fake_urlopen([resp])):
+            caps = get_market_caps(["AAPL", "X", "Y"])
+        assert caps == {"NASDAQ:AAPL": 4460000000000.0}
+
+    def test_raises_on_http_error(self):
+        def _open(req, timeout=None):
+            raise urllib.error.HTTPError(req.full_url, 500, "boom", {}, None)
+
+        with mock.patch("urllib.request.urlopen", side_effect=_open):
+            try:
+                get_market_caps(["AAPL"])
+            except RuntimeError as exc:
+                assert "500" in str(exc)
+            else:
+                raise AssertionError("expected RuntimeError on HTTP error")
