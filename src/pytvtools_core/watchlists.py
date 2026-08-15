@@ -522,6 +522,71 @@ def screen(
     return rows, total
 
 
+def get_market_caps(
+    symbols: list[str],
+    market: str = "america",
+    timeout: float = 30.0,
+) -> dict[str, float]:
+    """Market caps for an explicit ticker list via the scanner.
+
+    POSTs a ticker-list scan (``symbols.tickers``) requesting only the
+    ``market_cap_basic`` column. Returns ``{symbol: cap}`` keyed by the
+    scanner's returned symbol (exchange-prefixed, dot-form). Members whose
+    cap is null (delisted / non-tradable) are omitted.
+
+    Parameters
+    ----------
+    symbols : list[str]
+        Explicit ticker list, e.g. ``["AAPL", "BRK.B"]``. Pass dot-form
+        (``BRK.B``), not dash-form (``BRK-B``).
+    market : str
+        Scanner market, e.g. ``"america"``.
+    timeout : float
+        Seconds to wait for the server response.
+    """
+    caps: dict[str, float] = {}
+    chunk_size = 500  # keep each POST modest; the scanner accepts large lists
+    for i in range(0, len(symbols), chunk_size):
+        chunk = symbols[i : i + chunk_size]
+        payload: dict[str, object] = {
+            "symbols": {"tickers": list(chunk)},
+            "columns": ["market_cap_basic"],
+            "range": [0, len(chunk)],
+        }
+        body = json.dumps(payload).encode()
+        req = urllib.request.Request(
+            _SCANNER_URL.format(market=market),
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 "
+                "Safari/537.36",
+                "Referer": "https://www.tradingview.com/screener/",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode())
+        except urllib.error.HTTPError as err:
+            reason = f": {err.reason}" if err.reason else ""
+            raise RuntimeError(
+                f"get_market_caps({len(symbols)} symbols) failed: HTTP {err.code}{reason}"
+            ) from err
+        except urllib.error.URLError as err:
+            raise RuntimeError(
+                f"get_market_caps({len(symbols)} symbols) failed: {err.reason}"
+            ) from err
+
+        for item in data.get("data", []):
+            values = item.get("d") or []
+            cap = values[0] if values else None
+            if cap is not None:
+                caps[str(item["s"])] = float(cap)
+    return caps
+
+
 US_STOCK_EXCHANGES: tuple[str, ...] = ("NYSE", "NASDAQ", "AMEX")
 
 _US_STOCKS_CACHE: Watchlist | None = None
