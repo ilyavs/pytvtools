@@ -918,3 +918,82 @@ def get_gics_classifications(
         row["symbol"] = _resolve_symbol(r["symbol"], prefix_map)
         out.append(row)
     return out
+
+
+# ---------------------------------------------------------------------------
+# TradingView classifications + tagged row builder
+# ---------------------------------------------------------------------------
+
+def _symbol_map_from_tv(tv_rows: list[dict[str, str]]) -> dict[str, str]:
+    """bare -> exchange-prefixed map, tolerant of `.`/`-` (BRK-B vs BRK.B)."""
+    out: dict[str, str] = {}
+    for r in tv_rows:
+        sym = r["symbol"]
+        bare = sym.split(":", 1)[1] if ":" in sym else sym
+        out[bare.replace("-", ".")] = sym
+    return out
+
+
+def get_tv_classifications(
+    *,
+    market: str = "america",
+    exchanges: tuple[str, ...] = ("NYSE", "NASDAQ", "AMEX"),
+) -> list[dict[str, str]]:
+    """TradingView ICB-style sector/industry for all US stocks."""
+    rows: list[dict[str, str]] = []
+    for exch in exchanges:
+        screen_rows, _ = screen(market=market, exchange=exch, columns=("sector", "industry"))
+        for r in screen_rows:
+            rows.append({
+                "symbol": str(r["symbol"]),
+                "sector": r["sector"] if r["sector"] is not None else "",
+                "industry": r["industry"] if r["industry"] is not None else "",
+            })
+    return rows
+
+
+def classification_rows(
+    *,
+    force_refetch: bool = False,
+    exchanges: tuple[str, ...] = ("NYSE", "NASDAQ", "AMEX"),
+) -> list[dict[str, str | None]]:
+    """Union GICS + TV classifications, tagged by taxonomy, with refreshed_at.
+
+    Derives the ``bare -> prefixed`` symbol map from the TV sweep itself
+    (single ``screen()`` call per exchange — no second market sweep), then
+    feeds it to ``get_gics_classifications`` so the GICS table's ``symbol``
+    matches the form ``ohlcv`` stores.
+    """
+    from datetime import datetime, timezone
+
+    tv = get_tv_classifications(exchanges=exchanges)
+    symbol_map = _symbol_map_from_tv(tv)
+    gics = get_gics_classifications(
+        force_refetch=force_refetch, symbol_map=symbol_map
+    )
+
+    refreshed_at = datetime.now(timezone.utc).isoformat()
+    rows: list[dict[str, str | None]] = []
+    for r in gics:
+        rows.append({
+            "symbol": r["symbol"],
+            "taxonomy": "gics",
+            "sector": r["sector"],
+            "industry_group": r["industry_group"],
+            "industry": r["industry"],
+            "sub_industry": r["sub_industry"],
+            "security": r["security"],
+            "refreshed_at": refreshed_at,
+        })
+    for r in tv:
+        rows.append({
+            "symbol": r["symbol"],
+            "taxonomy": "tv",
+            "sector": r["sector"],
+            "industry_group": None,
+            "industry": r["industry"],
+            "sub_industry": None,
+            "security": None,
+            "refreshed_at": refreshed_at,
+        })
+    return rows

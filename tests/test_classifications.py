@@ -1,5 +1,7 @@
 """Tests for classifications.py — GICS + TradingView per-ticker taxonomy."""
 
+from unittest import mock
+
 import pytest
 
 from pytvtools_core.classifications import (
@@ -7,7 +9,9 @@ from pytvtools_core.classifications import (
     _GICS_HIERARCHY,
     _GICS_CONSTITUENTS_STATIC,
     _gics_cache,
+    classification_rows,
     get_gics_classifications,
+    get_tv_classifications,
 )
 
 
@@ -111,3 +115,52 @@ def test_all_static_symbols_roll_up_cleanly():
         assert r["industry_group"], r
         assert r["industry"], r
         assert r["sector"], r
+
+
+def test_get_tv_classifications_uses_screen():
+    fake_screen = [
+        {"symbol": "NYSE:BRK.B", "sector": "Finance", "industry": "Property/Casualty Insurance"},
+        {"symbol": "NASDAQ:GOOGL", "sector": "Technology Services", "industry": "Internet Software/Services"},
+    ]
+    with mock.patch(
+        "pytvtools_core.classifications.screen",
+        return_value=(fake_screen, len(fake_screen)),
+    ) as scr:
+        rows = get_tv_classifications(exchanges=("NYSE",))
+    scr.assert_called_once()
+    assert rows == [
+        {"symbol": "NYSE:BRK.B", "sector": "Finance", "industry": "Property/Casualty Insurance"},
+        {"symbol": "NASDAQ:GOOGL", "sector": "Technology Services", "industry": "Internet Software/Services"},
+    ]
+
+
+def test_classification_rows_tags_taxonomy():
+    _reset_cache()
+    tv_rows = [
+        {"symbol": "NYSE:A", "sector": "Finance", "industry": "Major Banks"},
+    ]
+    with mock.patch(
+        "pytvtools_core.classifications.screen",
+        return_value=(tv_rows, len(tv_rows)),
+    ):
+        rows = classification_rows(
+            exchanges=("NYSE",), force_refetch=True
+        )
+    by_tax = {}
+    for r in rows:
+        by_tax.setdefault(r["taxonomy"], []).append(r)
+    # GICS rows present (from static snapshot), TV rows tagged tv
+    assert len(by_tax["tv"]) == 1
+    tv = by_tax["tv"][0]
+    assert tv["symbol"] == "NYSE:A"
+    assert tv["taxonomy"] == "tv"
+    assert tv["industry_group"] is None
+    assert tv["sub_industry"] is None
+    assert tv["security"] is None
+    assert tv["refreshed_at"] is not None
+    # every GICS row must have the full roll-up populated
+    for r in by_tax["gics"]:
+        assert r["taxonomy"] == "gics"
+        assert r["industry_group"] and r["industry"] and r["sector"]
+        assert r["industry_group"] is not None
+    assert len(by_tax["gics"]) == len(_GICS_CONSTITUENTS_STATIC)
