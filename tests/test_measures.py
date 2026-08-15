@@ -159,3 +159,92 @@ def test_rolling_exponential_half_life():
     )
     assert len(ar) == 1 + (120 - 20)
     assert np.nanmax(ar) <= 1.0 + 1e-9
+
+
+from pytvtools_core.measures import absorption_ratio, rolling_absorption_ratio, cap_weighted_index
+
+
+def test_cap_index_single_member_tracks_price():
+    # One active member, one zero-cap member: index = member price scaled to base.
+    closes = np.array([
+        [10.0, np.nan],
+        [11.0, np.nan],
+        [12.1, np.nan],
+    ])
+    levels = cap_weighted_index(closes, caps=np.array([100.0, 0.0]), base=100.0)
+    assert levels[0] == pytest.approx(100.0)
+    assert levels[1] == pytest.approx(100.0 * 11.0 / 10.0)    # 110.0
+    assert levels[2] == pytest.approx(100.0 * 12.1 / 10.0)    # 121.0
+
+
+def test_cap_index_renormalizes_with_late_joiner():
+    # Member A trades all 3 days; member B joins on day 2 (no t-1 close -> ramps
+    # in from day 3). Weights renormalize to 0.5/0.5 once B is eligible.
+    closes = np.array([
+        [100.0, np.nan],
+        [110.0, 80.0],
+        [121.0, 100.0],
+    ])
+    caps = np.array([1.0, 1.0])  # equal caps -> renormalized to 0.5/0.5
+    levels = cap_weighted_index(closes, caps, base=100.0)
+    assert levels[0] == pytest.approx(100.0)
+    assert levels[1] == pytest.approx(110.0)  # only A eligible: +10%
+    r2 = 0.5 * (121.0 / 110.0 - 1) + 0.5 * (100.0 / 80.0 - 1)  # 0.5*0.1 + 0.5*0.25
+    assert levels[2] == pytest.approx(110.0 * (1 + r2))        # 110 * 1.175
+
+
+def test_cap_index_hand_computed_unequal_caps():
+    # A weight 3/4, B weight 1/4 once both eligible.
+    closes = np.array([
+        [100.0, np.nan],
+        [110.0, 200.0],
+        [121.0, 220.0],
+    ])
+    caps = np.array([3.0, 1.0])
+    levels = cap_weighted_index(closes, caps, base=1000.0)
+    assert levels[0] == pytest.approx(1000.0)
+    assert levels[1] == pytest.approx(1100.0)  # A only: +10%
+    r2 = 0.75 * (121.0 / 110.0 - 1) + 0.25 * (220.0 / 200.0 - 1)  # 0.75*0.1 + 0.25*0.1
+    assert levels[2] == pytest.approx(1100.0 * (1 + r2))          # 1100 * 1.1
+
+
+def test_cap_index_leading_all_nan_is_nan():
+    closes = np.array([
+        [np.nan, np.nan],
+        [10.0, np.nan],
+        [11.0, np.nan],
+    ])
+    levels = cap_weighted_index(closes, caps=np.array([1.0, 2.0]))
+    assert np.isnan(levels[0])
+    assert levels[1] == pytest.approx(100.0)
+    assert levels[2] == pytest.approx(110.0)
+
+
+def test_cap_index_zero_cap_does_not_divide_by_zero():
+    closes = np.array([
+        [10.0, 10.0],
+        [11.0, 10.0],
+    ])
+    caps = np.array([0.0, 1.0])
+    levels = cap_weighted_index(closes, caps)
+    assert levels[1] == pytest.approx(100.0)  # only the positive-cap member counts
+
+
+def test_cap_index_no_data_raises():
+    closes = np.full((5, 2), np.nan)
+    try:
+        cap_weighted_index(closes, caps=np.array([1.0, 2.0]))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError when no member has data")
+
+
+def test_cap_index_caps_length_mismatch_raises():
+    closes = np.ones((5, 2))
+    try:
+        cap_weighted_index(closes, caps=np.array([1.0, 2.0, 3.0]))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError on caps/closes width mismatch")
