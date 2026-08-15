@@ -34,13 +34,14 @@ Neither mapping is persisted anywhere in the repo or UC today.
 | Source | Universe | Taxonomy | Columns | Refresh |
 |--------|----------|----------|---------|---------|
 | `datasets/s-and-p-500-companies` `constituents.csv` (GitHub) | S&P 500 members (~503) | GICS | sector, sub_industry (as published) | quarterly (S&P membership) |
-| `skysaint/gics-data` `en/gics.csv` (GitHub) | full GICS structure | GICS | code, name, parent_code, level_num (274 rows, 2023 ed.) | yearly |
+| `skysaint/gics-data` `en/gics.csv` (GitHub) | full GICS structure | GICS | code, name, parent_code, level_num (273 rows, 2023 ed.) | yearly |
 | TradingView scanner API (via `screen()`) | all US stocks (NYSE/NASDAQ/AMEX) | ICB-style | sector, industry | live |
 
 The GICS `constituents.csv` publishes only sector + sub-industry; the
 **industry tier** (the paper's ~51-industry level) is derived by rolling
-sub-industries up through the GICS hierarchy (69 industries / 25 industry
-groups / 11 sectors in the 2023 edition).
+sub-industries up through the GICS hierarchy (74 industries / 25 industry
+groups / 11 sectors in the 2023 edition). The 503 S&P 500 members resolve to
+69 distinct GICS industries.
 
 ## Table schema
 
@@ -78,7 +79,7 @@ Mirrors `watchlists.py` conventions (no new deps; stdlib + optional pandas
 for CSV parsing, same as `get_sp500()`).
 
 - `_GICS_HIERARCHY` — embedded dict `{code: {name, parent_code, level_num}}`
-  for all 274 GICS codes (2023 edition). Vendored constant (Approach A),
+  for all 273 GICS codes (2023 edition). Vendored constant (Approach A),
   like `_SP500_TICKERS`.
 - `_GICS_CONSTITUENTS_STATIC` — embedded ~503-row snapshot of
   `(symbol, security, sector, sub_industry)`, used only if the live fetch
