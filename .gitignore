@@ -16,3 +16,6 @@ build/
 
 # Git worktrees
 /.worktrees/
+
+# SDD plan workspace
+/.superpowers/
