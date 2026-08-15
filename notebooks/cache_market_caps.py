@@ -35,8 +35,10 @@ print(f"Refreshing {OUTPUT_TABLE}")
 # COMMAND ----------
 
 members = list(get_sp500().symbols)
-# The scanner expects dot-form tickers (BRK.B) — convert get_sp500()'s dash form.
-tickers = [s.replace("-", ".") for s in members]
+# The scanner expects dot-form tickers (BRK.B). get_sp500() returns dash form
+# (BRK-B) from the live Wikipedia fetch and underscore form (BRK_B) from the
+# static fallback — normalize both.
+tickers = [s.replace("-", ".").replace("_", ".") for s in members]
 print(f"S&P 500 members: {len(tickers)}")
 
 caps = get_market_caps(tickers)
