@@ -51,6 +51,11 @@ rows = [
     {"symbol": sym, "market_cap": float(cap), "snapshot_date": snapshot_date}
     for sym, cap in caps.items()
 ]
+if not rows:
+    raise RuntimeError(
+        f"no market caps resolved for {len(tickers)} tickers — aborting to "
+        "protect today's existing snapshot"
+    )
 
 df = spark.createDataFrame(rows, schema=StructType([
     StructField("symbol", StringType(), False),

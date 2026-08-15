@@ -58,20 +58,23 @@ def cap_weighted_index(
 
 **Algorithm** (per-date availability, renormalized weights):
 
-- On each date `t`, the available set = members with a non-NaN close that day.
-  Weight of member `i` on day `t` = `caps[i] / Σ caps[available on t]` — weights
-  always sum to 1.
-- Index return from `t-1 → t` uses members with data on **both** days:
-  `R_t = Σ_i w_i(t) · (close_i(t)/close_i(t-1) − 1)` over members valid on both.
-  A member's first trading day has no `t-1` close, so it **ramps in from the
-  next day** (its weight participates once it has a return).
+- On each date `t`, the **return-contributing set** = members with a non-NaN
+  close on **both** `t` and `t-1` (a member's first trading day has no `t-1`
+  close, so it **ramps in from the next day** — its weight participates once
+  it has a return).
+- Index return from `t-1 → t` over that contributing set:
+  `R_t = Σ_i w_i(t) · (close_i(t)/close_i(t-1) − 1)`, where weight of member `i`
+  is renormalized over the contributing set only:
+  `w_i(t) = caps[i] / Σ caps[contributing on t]` — contributing weights always
+  sum to 1. Members absent on either day sit out entirely for that step.
 - Levels chain: `L_t = L_{t-1} · (1 + R_t)`, starting `L = base` at the first
   date with any available member. Rows before that stay NaN.
 
 Guarantees:
 - A short-history member never truncates the series — it sits out its missing
   years; the index spans the oldest member with data.
-- Renormalization means the index is a valid cap-weighted portfolio every day.
+- Renormalization over the contributing set means the index is a valid
+  cap-weighted portfolio among trading members every day.
 
 ### Component 2 — `get_market_caps()` in `src/pytvtools_core/watchlists.py`
 
